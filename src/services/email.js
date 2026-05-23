@@ -9,6 +9,10 @@ if (!process.env.RESEND_API_KEY) {
   console.log("✅ Resend email service ready");
 }
 
+const adminEmails = [
+  process.env.ADMIN_EMAIL,
+  process.env.ADMIN2_EMAIL,
+].filter(Boolean);
 // ── Use Resend's test domain OR your own verified domain ──
 const FROM_EMAIL = process.env.RESEND_FROM || "SEAL SmartTrade AI <onboarding@resend.dev>";
 
@@ -49,11 +53,11 @@ export async function sendLeadNotification({ name, email, query }) {
   `;
 
 const { data, error } = await resend.emails.send({
-    from:    FROM_EMAIL,
-    to:      [process.env.ADMIN_EMAIL],
-    replyTo: email,
-    subject: `🎯 New Lead: ${name} - ${query.slice(0, 50)}`,
-    html:    emailWrapper("New Lead Notification", content),
+  from: FROM_EMAIL,
+  to: adminEmails,
+  replyTo: email,
+  subject: `🎯 New Lead: ${name} - ${query.slice(0, 50)}`,
+  html: emailWrapper("New Lead Notification", content),
 });
 
   if (error) throw new Error(error.message);
@@ -102,7 +106,7 @@ export async function sendQuoteRequest({
 
   const { data, error } = await resend.emails.send({
     from:    FROM_EMAIL,
-    to:      [process.env.ADMIN_EMAIL],
+    to:      adminEmails,
     replyTo: email,
     subject: `💰 Quote Request from ${name} - ${supplierName || "General"}`,
     html:    emailWrapper("Quote Request", content),
@@ -133,7 +137,7 @@ export async function sendReportToUser({
   const { data, error } = await resend.emails.send({
     from:    FROM_EMAIL,
     to:      [recipientEmail],
-    bcc:     [process.env.ADMIN_EMAIL],
+    bcc:     adminEmails,
     subject: `📄 Your SEAL Import Analysis Report - ${supplierName || "Analysis"}`,
     html:    emailWrapper("Your Import Analysis Report", content),
     attachments: pdfBase64 ? [{
