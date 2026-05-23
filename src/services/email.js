@@ -48,13 +48,14 @@ export async function sendLeadNotification({ name, email, query }) {
     <p style="color: #64748b; font-size: 14px;">Follow up within 24 hours for best conversion.</p>
   `;
 
-  const { data, error } = await resend.emails.send({
+const { data, error } = await resend.emails.send({
     from:    FROM_EMAIL,
     to:      [process.env.ADMIN_EMAIL],
+    bcc:     [process.env.ADMIN2_EMAIL],
     replyTo: email,
     subject: `🎯 New Lead: ${name} - ${query.slice(0, 50)}`,
     html:    emailWrapper("New Lead Notification", content),
-  });
+});
 
   if (error) throw new Error(error.message);
   return data;
