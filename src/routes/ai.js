@@ -94,13 +94,13 @@ router.post("/costs", async (req, res) => {
 
   // Duty rates by product type
   const dutyRates = {
-    furniture: 0.06,
-    electronics: 0.0,
-    textiles: 0.12,
-    machinery: 0.02,
-    other: 0.05,
+    furniture: 0.15,
+    electronics: 0.15,
+    textiles: 0.15,
+    machinery: 0.15,
+    other: 0.15,
   };
-  const dutyRate = dutyRates[productType] || 0.06;
+  const dutyRate = dutyRates[productType] || 0.15;
   const importDuties = Math.round(productCost * dutyRate);
 
   // Taxes — IVA 12% of (product + duties)
