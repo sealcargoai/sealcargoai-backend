@@ -209,7 +209,7 @@ function getMockReply(message, context) {
   const msg = (message || "").toLowerCase();
 
   if (msg.includes("precio") || msg.includes("cost") || msg.includes("price")) {
-    return "Based on your requirements, the estimated total landed cost includes product cost, shipping ($3,500–$5,000 depending on destination), import duties (2–12% depending on product type), and insurance (~0.9%). Would you like me to calculate the exact breakdown for your selected supplier?";
+    return "Based on your requirements, the estimated total landed cost includes product cost, shipping ($3,500–$5,000 depending on destination), import duties (15% flat rate for all categories), and insurance (~1% of product value). Would you like me to calculate the exact breakdown for your selected supplier?";
   }
   if (msg.includes("proveedor") || msg.includes("supplier")) {
     return "I've analyzed suppliers based on quality scores, response rates, years in business, and pricing. The top-ranked supplier has an AI score of 98/100. Would you like me to explain the ranking criteria in more detail?";
@@ -220,7 +220,7 @@ function getMockReply(message, context) {
     msg.includes("duty") ||
     msg.includes("arancel")
   ) {
-    return "For your import you'll need: Commercial Invoice, Packing List, Bill of Lading, and Certificate of Origin. Duty rates vary by HS code — furniture is typically 6%, electronics 0%, textiles 12%. I recommend working with a licensed customs broker for your first shipment.";
+    return "For your import you'll need: Commercial Invoice, Packing List, Bill of Lading, and Certificate of Origin. Import duties are 15% for all product categories (furniture, electronics, textiles, machinery). I recommend working with a licensed customs broker for your first shipment.";
   }
   if (
     msg.includes("tiempo") ||
