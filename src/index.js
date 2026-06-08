@@ -1,12 +1,13 @@
+import dotenv from "dotenv";
+dotenv.config();   // ✅ MUST BE FIRST
+console.log("RESEND KEY:", process.env.RESEND_API_KEY);
+
 import express from "express";
 import cors from "cors";
-import dotenv from "dotenv";
 import suppliersRouter from "./routes/suppliers.js";
 import aiRouter from "./routes/ai.js";
 import emailRoutes from "./routes/email.js";
 
-
-dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 3001;
