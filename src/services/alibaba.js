@@ -4,9 +4,14 @@ import axios from "axios";
    Build Alibaba Search URL
 ───────────────────────────────────────────── */
 function buildAlibabaSearchUrl(keyword) {
-    const plusFormatted = keyword.trim().split(" ").join("+");
+    const cleanKeyword = keyword
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, " ")
+        .split(" ")
+        .join("+");
 
-    return `https://www.alibaba.com/trade/search?spm=a27aq.404error.the-new-header_fy23_pc_search_bar.keydown__Enter&tab=all&SearchText=${plusFormatted}&has4Tab=true`;
+    return `https://www.alibaba.com/trade/search?spm=a27aq.404error.the-new-header_fy23_pc_search_bar.keydown__Enter&tab=all&SearchText=${cleanKeyword}&has4Tab=true`;
 }
 
 /* ─────────────────────────────────────────────
@@ -30,7 +35,8 @@ async function fetchAlibabaHtml(keyword) {
             url,
             geo_location: "United States",
             render: "html",
-            user_agent_type: "desktop"
+            user_agent_type: "desktop",
+            proxy_type: "residential"
         },
         {
             auth: { username, password },
@@ -189,7 +195,7 @@ async function searchAlibabaScraper({ keyword, pageSize = 20 }) {
 
     const html = await fetchAlibabaHtml(keyword);
 
-    if (!html) {
+    if (!html || html.length < 10000) {
         console.log("❌ HTML not returned");
         return [];
     }
