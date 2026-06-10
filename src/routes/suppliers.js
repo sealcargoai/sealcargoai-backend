@@ -42,9 +42,11 @@ router.post("/search", async (req, res) => {
     console.log(`   Destination: ${destination || "not specified"}`);
 
     // ── STEP 1: Get smart keyword from Grok ─────────────────────────────────
-    const keyword = userQuery && userQuery.trim()
-      ? userQuery.trim()
-      : productType;
+    const keyword = await refineKeyword({
+      userQuery,
+      productType,
+      material,
+    });
 
     console.log(`   🎯 Final Search Keyword: "${keyword}"`);
 

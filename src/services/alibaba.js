@@ -47,7 +47,7 @@ async function fetchAlibabaHtml(keyword) {
 }
 
 /* ─────────────────────────────────────────────
-   Extract Hydration JSON (Brace Counter Safe)
+   Extract Hydration JSON
 ───────────────────────────────────────────── */
 function extractOfferList(html) {
     if (!html) return null;
@@ -60,12 +60,8 @@ function extractOfferList(html) {
         return null;
     }
 
-    // Find first { after marker
     const firstBrace = html.indexOf("{", startIndex);
-    if (firstBrace === -1) {
-        console.log("❌ Opening brace not found");
-        return null;
-    }
+    if (firstBrace === -1) return null;
 
     let braceCount = 0;
     let endIndex = -1;
@@ -73,30 +69,25 @@ function extractOfferList(html) {
     for (let i = firstBrace; i < html.length; i++) {
         if (html[i] === "{") braceCount++;
         if (html[i] === "}") braceCount--;
-
         if (braceCount === 0) {
             endIndex = i;
             break;
         }
     }
 
-    if (endIndex === -1) {
-        console.log("❌ Closing brace not found");
-        return null;
-    }
+    if (endIndex === -1) return null;
 
     const jsonString = html.substring(firstBrace, endIndex + 1);
 
     try {
         return JSON.parse(jsonString);
-    } catch (err) {
-        console.log("❌ JSON parse failed:", err.message);
+    } catch {
         return null;
     }
 }
 
 /* ─────────────────────────────────────────────
-   Convert Price Range → Average Number
+   Normalize Price (Range → Average)
 ───────────────────────────────────────────── */
 function normalizePrice(priceText) {
     if (!priceText) return 0;
@@ -105,15 +96,13 @@ function normalizePrice(priceText) {
 
     if (clean.includes("-")) {
         const parts = clean.split("-").map(p => parseFloat(p));
-        const valid = parts.filter(n => !isNaN(n));
-        if (valid.length === 2) {
-            return (valid[0] + valid[1]) / 2;
+        if (parts.length === 2) {
+            return (parts[0] + parts[1]) / 2;
         }
-        return valid[0] || 0;
+        return parts[0] || 0;
     }
 
-    const single = parseFloat(clean);
-    return isNaN(single) ? 0 : single;
+    return parseFloat(clean) || 0;
 }
 
 /* ─────────────────────────────────────────────
@@ -126,26 +115,35 @@ function extractMOQ(text) {
 }
 
 /* ─────────────────────────────────────────────
+   Fuzzy Relevance Scoring
+───────────────────────────────────────────── */
+function calculateRelevance(title, keyword) {
+    const cleanTitle = title.replace(/<[^>]+>/g, "").toLowerCase();
+    const keywordWords = keyword.toLowerCase().split(" ");
+
+    let score = 0;
+
+    keywordWords.forEach(word => {
+        if (cleanTitle.includes(word)) score += 1;
+    });
+
+    return score;
+}
+
+/* ─────────────────────────────────────────────
    Map Offers → Suppliers
 ───────────────────────────────────────────── */
 function mapOffersToSuppliers(offerList, keyword) {
     const offers = offerList?.offerResultData?.offers || [];
-    const keywordWords = keyword.toLowerCase().split(" ");
 
     return offers
         .map((product, index) => {
             const rawTitle = product.title || "";
             const cleanTitle = rawTitle.replace(/<[^>]+>/g, "").toLowerCase();
 
-            let relevance = 0;
-            keywordWords.forEach(word => {
-                if (cleanTitle.includes(word)) relevance++;
-            });
+            const relevance = calculateRelevance(rawTitle, keyword);
 
             if (relevance === 0) return null;
-
-            const price = normalizePrice(product.price);
-            const moq = extractMOQ(product.moq);
 
             return {
                 id: index + 1,
@@ -160,8 +158,8 @@ function mapOffersToSuppliers(offerList, keyword) {
                 ) || [],
                 rating: parseFloat(product.reviewScore) || 4.3,
                 reviews: parseInt(product.reviewCount) || 0,
-                moq,
-                price,
+                moq: extractMOQ(product.moq),
+                price: normalizePrice(product.price),
                 priceRange: product.price,
                 verified: !!product.goldSupplierYears,
                 location: product.countryCode || "CN",
@@ -190,78 +188,27 @@ function mapOffersToSuppliers(offerList, keyword) {
    Main Scraper
 ───────────────────────────────────────────── */
 async function searchAlibabaScraper({ keyword, pageSize = 20 }) {
-    console.log("🟡 STEP 1: Fetching HTML...");
-
     const html = await fetchAlibabaHtml(keyword);
 
     if (!html || html.length < 10000) {
-        console.log("❌ HTML not returned");
+        console.log("❌ HTML invalid");
         return [];
     }
 
     const offerList = extractOfferList(html);
-
     if (!offerList) {
         console.log("❌ Hydration extraction failed");
         return [];
     }
 
-    const offers = offerList?.offerResultData?.offers || [];
-
-    console.log("🟡 Sample first 3 titles:");
-    offers.slice(0, 3).forEach((o, i) => {
-        console.log(`   ${i + 1}.`, o.title);
-    });
-
-
     const suppliers = mapOffersToSuppliers(offerList, keyword);
-    console.log(`🟢 Found ${suppliers.length} relevant suppliers`);
-
-
-    if (suppliers.length > 0) {
-        console.log("🟢 First relevant title:", suppliers[0].productName);
-    }
-    console.log("🟡 Returning top", pageSize, "suppliers");
 
     return suppliers.slice(0, pageSize);
-}
-
-
-// ── Mock fallback ─────────────────────────────────────────────────────────────
-function getMockData() {
-    console.log("📦 Using mock supplier data");
-    return [
-        {
-            id: 1,
-            name: "No Supplier Data",
-            productName: "",
-            rating: 0.0,
-            reviews: 0,
-            moq: 0,
-            price: 0.0,
-            verified: false,
-            location: "N/A",
-            yearsInBusiness: 0,
-            responseRate: 0,
-            tags: [],
-            tradeAssurance: true,
-            goldSupplier: true,
-            contactEmail: "",
-            contactPhone: "",
-            productImage:
-                "",
-            images: [
-            ],
-            productUrl: "",
-            storeUrl: "",
-        }
-    ];
 }
 
 /* ─────────────────────────────────────────────
    Export
 ───────────────────────────────────────────── */
 export async function searchSuppliers({ keyword, pageSize = 20 }) {
-    const results = await searchAlibabaScraper({ keyword, pageSize });
-    return results.length > 0 ? results : getMockData();
+    return await searchAlibabaScraper({ keyword, pageSize });
 }
