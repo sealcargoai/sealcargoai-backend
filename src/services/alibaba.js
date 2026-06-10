@@ -6,7 +6,6 @@ import axios from "axios";
 function buildAlibabaSearchUrl(keyword) {
     const cleanKeyword = keyword
         .trim()
-        .toLowerCase()
         .replace(/\s+/g, " ")
         .split(" ")
         .join("+");
