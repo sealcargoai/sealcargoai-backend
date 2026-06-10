@@ -4,14 +4,13 @@ import axios from "axios";
    Build Alibaba Search URL
 ───────────────────────────────────────────── */
 function buildAlibabaSearchUrl(keyword) {
-    const cleanKeyword = keyword
-        .trim()
-        .toLowerCase()
-        .replace(/\s+/g, " ")
-        .split(" ")
-        .join("+");
+  const cleanKeyword = keyword
+    .trim()
+    .replace(/\s+/g, " ")
+    .split(" ")
+    .join("+");
 
-    return `https://www.alibaba.com/trade/search?spm=a27aq.404error.the-new-header_fy23_pc_search_bar.keydown__Enter&tab=all&SearchText=${cleanKeyword}&has4Tab=true`;
+  return `https://www.alibaba.com/search/page?spm=a2700.product_home_fy25.home_login_first_screen_fy23_pc_search_bar.searchButton&SearchScene=proSearch&SearchText=${cleanKeyword}&pro=true&from=pcHomeContent`;
 }
 
 /* ─────────────────────────────────────────────
@@ -216,11 +215,13 @@ async function searchAlibabaScraper({ keyword, pageSize = 20 }) {
 
 
     const suppliers = mapOffersToSuppliers(offerList, keyword);
+    console.log(`🟢 Found ${suppliers.length} relevant suppliers`);
 
 
     if (suppliers.length > 0) {
         console.log("🟢 First relevant title:", suppliers[0].productName);
     }
+    console.log("🟡 Returning top", pageSize, "suppliers");
 
     return suppliers.slice(0, pageSize);
 }
