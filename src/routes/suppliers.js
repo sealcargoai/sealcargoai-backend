@@ -4,6 +4,21 @@ import { searchSuppliers } from "../services/alibaba.js";
 import { scoreSuppliers, categorizeSuppliers } from "../services/scoring.js";
 import { refineKeyword } from "./ai.js";
 
+const searchTracker = new Map(); // email -> count
+const SEARCH_LIMIT = 3;
+
+function checkSearchLimit(email) {
+  if (!email) return true; // No email = allow (guest)
+  const count = searchTracker.get(email) || 0;
+  return count < SEARCH_LIMIT;
+}
+
+function recordBackendSearch(email) {
+  if (!email) return;
+  const count = searchTracker.get(email) || 0;
+  searchTracker.set(email, count + 1);
+}
+
 const router = express.Router();
 const cache = new NodeCache({ stdTTL: 3600 });
 
@@ -23,13 +38,22 @@ router.post("/search", async (req, res) => {
       quantity,
       budget,
       destination,
-      userQuery,        // ← NEW: original search bar query
+      userQuery,
+      userEmail,   // ← Frontend will send this
     } = req.body;
+
+    // ── SEARCH LIMIT CHECK ──────────────────────────────
+    if (userEmail && !checkSearchLimit(userEmail)) {
+      return res.status(429).json({
+        error: "Search limit reached",
+        message: "Has alcanzado el límite de búsquedas gratuitas.",
+        limitReached: true,
+      });
+    }
 
     if (!productType) {
       return res.status(400).json({ error: "productType is required" });
     }
-
     const qty = parseInt(quantity) || 1000;
     const bdg = parseFloat(budget) || 50000;
 
@@ -70,6 +94,9 @@ router.post("/search", async (req, res) => {
     const result = categorizeSuppliers(scored);
 
     console.log(`✅ Done: ${result.qualifiedCount} suppliers returned\n`);
+    
+    // ── RECORD SEARCH AT END (before cache.set) ─────────
+    recordBackendSearch(userEmail);
 
     cache.set(cacheKey, result);
     res.json({
