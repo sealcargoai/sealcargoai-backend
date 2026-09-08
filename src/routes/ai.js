@@ -255,7 +255,7 @@ export async function refineKeyword({ userQuery, productType, material }) {
     const response = await axios.post(
       "https://api.groq.com/openai/v1/chat/completions",
       {
-        model: "llama-3.3-70b-versatile",   // ✅ Groq supported model
+        model: "llama3-8b-8192",   // ✅ Groq supported model
         messages: [
           {
             role: "system",
