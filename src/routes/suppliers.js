@@ -98,6 +98,17 @@ router.post("/search", async (req, res) => {
     // ── RECORD SEARCH AT END (before cache.set) ─────────
     recordBackendSearch(userEmail);
 
+    if (!result?.topSuppliers?.length) {
+      console.log("⚠️ Not caching empty supplier result");
+      return res.json({
+        ...result,
+        fromCache: false,
+        searchKeyword: keyword,
+        blocked: true,
+        message: "Alibaba blocked the request (captcha). Try again.",
+      });
+    }
+
     cache.set(cacheKey, result);
     res.json({
       ...result,

@@ -255,13 +255,13 @@ export async function refineKeyword({ userQuery, productType, material }) {
     const response = await axios.post(
       "https://api.groq.com/openai/v1/chat/completions",
       {
-        model: "groq/compound-mini",   // ✅ Groq supported model
+        model: "qwen/qwen3.8-27b",   // ✅ Groq supported model
         messages: [
           {
             role: "system",
             content: `
 You are an Alibaba B2B search optimizer.
-Translate any language into the best 2-6 word English Alibaba search keyword.
+Translate any language into the best 1-3 word English Alibaba search keyword.
 Return ONLY the keyword.
             `
           },

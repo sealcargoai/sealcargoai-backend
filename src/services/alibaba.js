@@ -1,4 +1,5 @@
 import axios from "axios";
+import { HttpsProxyAgent } from "https-proxy-agent";
 
 /* ─────────────────────────────────────────────
    Build Alibaba Search URL
@@ -17,33 +18,91 @@ function buildAlibabaSearchUrl(keyword) {
    Fetch HTML From Oxylabs
 ───────────────────────────────────────────── */
 async function fetchAlibabaHtml(keyword) {
-    const username = process.env.OXY_USER;
-    const password = process.env.OXY_PASS;
+  const url = buildAlibabaSearchUrl(keyword);
 
-    if (!username || !password) {
-        console.log("⚠️ Missing Oxylabs credentials");
-        return null;
-    }
+  // ✅ 1) Try Web Unblocker proxy first
+  const ubUser = process.env.OXY_UNBLOCK_USER;
+  const ubPass = process.env.OXY_UNBLOCK_PASS;
 
-    const url = buildAlibabaSearchUrl(keyword);
+  if (ubUser && ubPass) {
+    console.log("🛡️ Using Oxylabs Web Unblocker");
 
-    const response = await axios.post(
-        "https://realtime.oxylabs.io/v1/queries",
-        {
-            source: "universal_ecommerce",
-            url,
-            geo_location: "United States",
-            render: "html",
-            user_agent_type: "desktop",
-            proxy_type: "residential"
+    const proxyUrl = `https://${encodeURIComponent(ubUser)}:${encodeURIComponent(
+      ubPass
+    )}@unblock.oxylabs.io:60000`;
+
+    const agent = new HttpsProxyAgent(proxyUrl);
+
+    // extra safety (still recommend NODE_TLS_REJECT_UNAUTHORIZED=0 in env)
+    agent.options.rejectUnauthorized = false;
+
+    try {
+      const resp = await axios.get(url, {
+        httpsAgent: agent,
+        proxy: false,
+        timeout: 60000,
+        responseType: "text",
+        transformResponse: (r) => r,
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+          "Accept-Language": "en-US,en;q=0.9",
+          Accept:
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+          Referer: "https://www.alibaba.com/",
         },
-        {
-            auth: { username, password },
-            timeout: 60000,
-        }
-    );
+      });
 
-    return response.data?.results?.[0]?.content || null;
+      const html = resp.data || "";
+      const isCaptcha =
+        html.includes("nocaptcha") ||
+        html.includes("cf.aliyun.com/nocaptcha") ||
+        html.length < 200000;
+
+      console.log(`📄 HTML size (unblocker): ${html.length}`);
+      console.log(`🧪 Captcha? ${isCaptcha}`);
+
+      if (!isCaptcha) return html;
+
+      console.log("🛑 Unblocker returned captcha HTML (will fallback).");
+    } catch (e) {
+      console.error(
+        "❌ Unblocker fetch failed:",
+        e.response?.status,
+        e.response?.data || e.message
+      );
+    }
+  } else {
+    console.log("⚠️ Missing OXY_UNBLOCK_USER/OXY_UNBLOCK_PASS (skipping unblocker)");
+  }
+
+  // ✅ 2) Fallback to your old Web Scraper API (might captcha)
+  const username = process.env.OXY_USER;
+  const password = process.env.OXY_PASS;
+
+  if (!username || !password) {
+    console.log("⚠️ Missing Oxylabs Scraper API credentials");
+    return null;
+  }
+
+  console.log("🔄 Falling back to Oxylabs Web Scraper API");
+  const response = await axios.post(
+    "https://realtime.oxylabs.io/v1/queries",
+    {
+      source: "universal_ecommerce",
+      url,
+      geo_location: "United States",
+      render: "html",
+      user_agent_type: "desktop",
+      proxy_type: "residential",
+    },
+    {
+      auth: { username, password },
+      timeout: 60000,
+    }
+  );
+
+  return response.data?.results?.[0]?.content || null;
 }
 
 /* ─────────────────────────────────────────────
