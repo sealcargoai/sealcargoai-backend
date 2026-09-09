@@ -241,58 +241,84 @@ function getMockReply(message, context) {
 export async function refineKeyword({ userQuery, productType, material }) {
   const apiKey = process.env.GROQ_API_KEY;
 
-  const fallback = [userQuery, productType, material]
-    .filter(Boolean)
+  // Primary input: userQuery if present, otherwise combine productType and material
+  const rawInput = (userQuery && userQuery.trim()) 
+    ? userQuery.trim()
+    : [productType, material].filter(Boolean).join(" ").trim();
+
+  const fallbackClean = rawInput
+    .replace(/["'`\n.]/g, "")
+    .split(/\s+/)
+    .slice(0, 6)
     .join(" ")
     .trim();
 
   if (!apiKey) {
-    console.log("⚠️ No Groq key — using fallback:", fallback);
-    return fallback;
+    console.log("⚠️ No Groq key — using fallback keyword:", fallbackClean);
+    return fallbackClean;
   }
 
-  try {
-    const response = await axios.post(
-      "https://api.groq.com/openai/v1/chat/completions",
-      {
-        model: "qwen/qwen3.8-27b",   // ✅ Groq supported model
-        messages: [
-          {
-            role: "system",
-            content: `
-You are an Alibaba B2B search optimizer.
-Translate any language into the best 1-3 word English Alibaba search keyword.
-Return ONLY the keyword.
-            `
+  const modelsToTry = ["groq/compound-mini", "qwen/qwen3.8-27b"];
+
+  for (const model of modelsToTry) {
+    try {
+      const response = await axios.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        {
+          model,
+          messages: [
+            {
+              role: "system",
+              content: `You are an Alibaba B2B search keyword optimizer.
+Translate any language query into a clean 2 to 5 word English Alibaba product search keyword.
+Rules:
+- Return ONLY the search keyword text.
+- Do NOT include thinking process, explanation, quotes, or punctuation.
+- Keep it concise (2-5 words).`
+            },
+            {
+              role: "user",
+              content: rawInput
+            }
+          ],
+          temperature: 0.1,
+          max_tokens: 30
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json"
           },
-          {
-            role: "user",
-            content: fallback
-          }
-        ],
-        temperature: 0.2,
-        max_tokens: 40
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json"
+          timeout: 10000
         }
+      );
+
+      let text = response.data?.choices?.[0]?.message?.content || "";
+      
+      // Remove any <think>...</think> tags or unclosed <think>
+      text = text.replace(/<think>[\s\S]*?<\/think>/gi, "");
+      text = text.replace(/<think>[\s\S]*/gi, "");
+
+      // Sanitize: strip quotes, backticks, linebreaks, punctuation
+      let cleaned = text
+        .replace(/["'`\r\n.,!?]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+
+      // Take first line and limit to max 6 words
+      cleaned = cleaned.split("\n")[0].split(/\s+/).slice(0, 6).join(" ").trim();
+
+      if (cleaned.length > 0) {
+        console.log(`🤖 Groq refined keyword (${model}): "${rawInput}" → "${cleaned}"`);
+        return cleaned;
       }
-    );
-
-    let refined =
-      response.data.choices?.[0]?.message?.content?.trim() || fallback;
-
-    refined = refined.replace(/["'`\n.]/g, "").trim();
-
-    console.log(`🤖 Groq refined keyword: "${fallback}" → "${refined}"`);
-
-    return refined;
-  } catch (error) {
-    console.error("❌ Groq refine error:", error.response?.data || error.message);
-    return fallback;
+    } catch (error) {
+      console.error(`⚠️ Groq refine failed with ${model}:`, error.response?.data?.error?.message || error.message);
+    }
   }
+
+  console.log("⚠️ All Groq models failed — using fallback keyword:", fallbackClean);
+  return fallbackClean;
 }
 
 export default router;
