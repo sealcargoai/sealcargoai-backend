@@ -7,8 +7,11 @@ const router = express.Router();
 router.post("/chat", async (req, res) => {
   const { message, context } = req.body;
 
-  if (!message) {
+  if (!message || typeof message !== "string") {
     return res.status(400).json({ error: "message is required" });
+  }
+  if (message.length > 2000) {
+    return res.status(400).json({ error: "message is too long (max 2000 characters)" });
   }
 
   const apiKey = process.env.GROK_API_KEY;
@@ -34,7 +37,7 @@ router.post("/chat", async (req, res) => {
             customs, and manage international trade. Be concise, professional, and 
             helpful. Always respond in the same language the user writes in.
             
-            Current context: ${JSON.stringify(context || {})}`,
+            Current context: ${JSON.stringify(context || {}).slice(0, 3000)}`,
           },
           {
             role: "user",

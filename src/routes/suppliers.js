@@ -3,20 +3,47 @@ import NodeCache from "node-cache";
 import { searchSuppliers } from "../services/alibaba.js";
 import { scoreSuppliers, categorizeSuppliers } from "../services/scoring.js";
 import { refineKeyword } from "./ai.js";
+import { clientIp } from "../middleware/security.js";
 
-const searchTracker = new Map(); // email -> count
-const SEARCH_LIMIT = 3;
+// ── Free search limit, enforced on the server ───────────────────────────────
+// Per email (3 free searches) and per IP (stops people switching emails or
+// using incognito). In memory: counters reset when the service restarts.
+const SEARCH_LIMIT = parseInt(process.env.SEARCH_LIMIT) || 3;
+const IP_SEARCH_LIMIT = parseInt(process.env.IP_SEARCH_LIMIT) || 6;
+const IP_WINDOW_MS = 24 * 60 * 60 * 1000;
 
-function checkSearchLimit(email) {
-  if (!email) return true; // No email = allow (guest)
-  const count = searchTracker.get(email) || 0;
-  return count < SEARCH_LIMIT;
+const emailTracker = new Map(); // email -> count
+const ipTracker = new Map();    // ip -> { count, resetAt }
+
+function normalizeEmail(email) {
+  return typeof email === "string" ? email.trim().toLowerCase() : "";
 }
 
-function recordBackendSearch(email) {
-  if (!email) return;
-  const count = searchTracker.get(email) || 0;
-  searchTracker.set(email, count + 1);
+function ipEntry(ip) {
+  const now = Date.now();
+  let entry = ipTracker.get(ip);
+  if (!entry || entry.resetAt <= now) {
+    entry = { count: 0, resetAt: now + IP_WINDOW_MS };
+    ipTracker.set(ip, entry);
+  }
+  return entry;
+}
+
+function checkSearchLimit(email, ip) {
+  if (email && (emailTracker.get(email) || 0) >= SEARCH_LIMIT) return false;
+  if (ipEntry(ip).count >= IP_SEARCH_LIMIT) return false;
+  return true;
+}
+
+function recordBackendSearch(email, ip) {
+  if (email) emailTracker.set(email, (emailTracker.get(email) || 0) + 1);
+  ipEntry(ip).count += 1;
+}
+
+function remainingSearches(email, ip) {
+  const byEmail = email ? SEARCH_LIMIT - (emailTracker.get(email) || 0) : SEARCH_LIMIT;
+  const byIp = IP_SEARCH_LIMIT - ipEntry(ip).count;
+  return Math.max(0, Math.min(byEmail, byIp));
 }
 
 const router = express.Router();
@@ -39,11 +66,12 @@ router.post("/search", async (req, res) => {
       budget,
       destination,
       userQuery,
-      userEmail,   // ← Frontend will send this
     } = req.body;
+    const userEmail = normalizeEmail(req.body.userEmail);
+    const ip = clientIp(req);
 
     // ── SEARCH LIMIT CHECK ──────────────────────────────
-    if (userEmail && !checkSearchLimit(userEmail)) {
+    if (!checkSearchLimit(userEmail, ip)) {
       return res.status(429).json({
         error: "Search limit reached",
         message: "Has alcanzado el límite de búsquedas gratuitas.",
@@ -79,7 +107,13 @@ router.post("/search", async (req, res) => {
     const cached = cache.get(cacheKey);
     if (cached) {
       console.log("⚡ Cache hit\n");
-      return res.json({ ...cached, fromCache: true, searchKeyword: keyword });
+      recordBackendSearch(userEmail, ip);
+      return res.json({
+        ...cached,
+        fromCache: true,
+        searchKeyword: keyword,
+        remainingSearches: remainingSearches(userEmail, ip),
+      });
     }
 
     // ── STEP 2: Fetch from Alibaba with refined keyword ─────────────────────
@@ -95,9 +129,7 @@ router.post("/search", async (req, res) => {
 
     console.log(`✅ Done: ${result.qualifiedCount} suppliers returned\n`);
     
-    // ── RECORD SEARCH AT END (before cache.set) ─────────
-    recordBackendSearch(userEmail);
-
+    // Empty / blocked results are not counted against the user
     if (!result?.topSuppliers?.length) {
       console.log("⚠️ Not caching empty supplier result");
       return res.json({
@@ -109,18 +141,19 @@ router.post("/search", async (req, res) => {
       });
     }
 
+    recordBackendSearch(userEmail, ip);
     cache.set(cacheKey, result);
     res.json({
       ...result,
       fromCache: false,
       searchKeyword: keyword,   // ← return so frontend knows what was searched
+      remainingSearches: remainingSearches(userEmail, ip),
     });
 
   } catch (error) {
     console.error("❌ /search error:", error.message);
     res.status(500).json({
       error: "Failed to search suppliers",
-      details: error.message,
     });
   }
 });
