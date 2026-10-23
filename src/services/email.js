@@ -1,4 +1,5 @@
 import { Resend } from "resend";
+import { escapeHtml as e } from "../middleware/security.js";
 
 /* ─────────────────────────────────────────────
    Safe Resend Client Creator
@@ -49,16 +50,16 @@ export async function sendLeadNotification({ name, email, query }) {
 
   const content = `
     <h2>🎯 New Lead</h2>
-    <p><b>Name:</b> ${name}</p>
-    <p><b>Email:</b> ${email}</p>
-    <p><b>Query:</b> ${query}</p>
+    <p><b>Name:</b> ${e(name)}</p>
+    <p><b>Email:</b> ${e(email)}</p>
+    <p><b>Query:</b> ${e(query)}</p>
   `;
 
   const { data, error } = await resend.emails.send({
     from: FROM_EMAIL,
     to: adminEmails,
     replyTo: email,
-    subject: `New Lead from ${name}`,
+    subject: `New Lead from ${name.replace(/[\r\n]/g, " ")}`,
     html: emailWrapper("New Lead Notification", content),
   });
 
@@ -74,7 +75,7 @@ export async function sendQuoteRequest(data) {
 
   const content = `
     <h2>💰 New Quote Request</h2>
-    <pre>${JSON.stringify(data, null, 2)}</pre>
+    <pre>${e(JSON.stringify(data, null, 2))}</pre>
   `;
 
   const { data: result, error } = await resend.emails.send({
@@ -103,9 +104,9 @@ export async function sendReportToUser({
 
   const content = `
     <h2>📄 Your Import Report</h2>
-    <p>Hello ${recipientName || ""}</p>
-    <p>Supplier: ${supplierName}</p>
-    <p>Total Cost: $${totalCost}</p>
+    <p>Hello ${e(recipientName || "")}</p>
+    <p>Supplier: ${e(supplierName)}</p>
+    <p>Total Cost: $${e(Number(totalCost || 0).toLocaleString("en-US"))}</p>
   `;
 
   const { data, error } = await resend.emails.send({
