@@ -1,28 +1,39 @@
 import dotenv from "dotenv";
 dotenv.config();   // ✅ MUST BE FIRST
-console.log("RESEND KEY:", process.env.RESEND_API_KEY);
 
 import express from "express";
 import cors from "cors";
 import suppliersRouter from "./routes/suppliers.js";
 import aiRouter from "./routes/ai.js";
 import emailRoutes from "./routes/email.js";
+import { corsOrigin, rateLimit } from "./middleware/security.js";
 
 
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+// Railway runs behind a proxy — needed to read the real client IP
+app.set("trust proxy", 1);
+app.disable("x-powered-by");
+
 app.use(cors({
-  origin: "*",
+  origin: corsOrigin,
   methods: ["GET", "POST"],
   allowedHeaders: ["Content-Type"],
 }));
 
-app.use(express.json());
+// 5 MB so the PDF report (base64) fits; default is 100 KB
+app.use(express.json({ limit: "5mb" }));
 
+// Rate limits per IP
+const searchLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 20 });
+const aiLimiter     = rateLimit({ windowMs: 10 * 60 * 1000, max: 40 });
+const emailLimiter  = rateLimit({ windowMs: 60 * 60 * 1000, max: 10 });
+
+app.use("/api/suppliers/search", searchLimiter);
 app.use("/api/suppliers", suppliersRouter);
-app.use("/api/ai", aiRouter);
-app.use("/api/email", emailRoutes);
+app.use("/api/ai", aiLimiter, aiRouter);
+app.use("/api/email", emailLimiter, emailRoutes);
 
 
 // Root route — no more "Cannot GET /"
