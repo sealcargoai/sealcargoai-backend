@@ -134,6 +134,7 @@ export function categorizeSuppliers(scoredSuppliers) {
     })),
     totalAnalyzed:  scoredSuppliers.length,
     qualifiedCount: qualified.length,
+    filteredCount:  rejected.length,   // real count (filteredOut list is capped at 20)
     filters:        FILTERS,
   };
 }
