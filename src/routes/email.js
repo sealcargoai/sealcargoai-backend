@@ -42,7 +42,13 @@ router.post("/quote", async (req, res) => {
       productType: clean(b.productType, 120),
       quantity: clean(b.quantity, 40),
       destination: clean(b.destination, 60),
+      budget: clean(b.budget, 40),
+      requestType: clean(b.requestType, 80),           // e.g. "Búsqueda asistida", "Contactar proveedor"
+      productDescription: clean(b.productDescription, 1500),
+      supplierUrl: clean(b.supplierUrl, 500),
     };
+    // Drop empty fields so the email stays clean
+    for (const k of Object.keys(data)) if (data[k] === "" || data[k] === 0) delete data[k];
     if (!data.name || !isEmail(data.email)) {
       return res.status(400).json({ error: "name and a valid email are required" });
     }

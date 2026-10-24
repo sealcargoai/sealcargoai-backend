@@ -149,15 +149,16 @@ router.post("/search", async (req, res) => {
 
     console.log(`✅ Done: ${result.qualifiedCount} suppliers returned\n`);
     
-    // Empty / blocked results are not counted against the user
-    if (!result?.topSuppliers?.length) {
+    // No results at all (Alibaba blocked / nothing found) are not counted.
+    // Results where every supplier failed the filters DO count — that's real info.
+    if (!result?.totalAnalyzed) {
       console.log("⚠️ Not caching empty supplier result");
       return res.json({
         ...result,
         fromCache: false,
         searchKeyword: keyword,
         blocked: true,
-        message: "Alibaba blocked the request (captcha). Try again.",
+        message: "No live results from Alibaba (blocked or no matches).",
       });
     }
 
