@@ -39,6 +39,7 @@ router.post("/quote", async (req, res) => {
       message: clean(b.message, 2000),
       supplierName: clean(b.supplierName, 200),
       totalCost: Number(b.totalCost) || 0,
+      totalCostText: clean(b.totalCostText, 80), // e.g. "Q278,041 (US$35,195)"
       productType: clean(b.productType, 120),
       quantity: clean(b.quantity, 40),
       destination: clean(b.destination, 60),
@@ -85,6 +86,7 @@ router.post("/report", async (req, res) => {
       pdfBuffer,
       supplierName: clean(b.supplierName, 200),
       totalCost: Number(b.totalCost) || 0,
+      totalCostText: clean(b.totalCostText, 80),
     });
     res.json({ success: true, delivered: result.delivered, forwarded: !!result.forwarded });
   } catch (err) {
