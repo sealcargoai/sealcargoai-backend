@@ -118,7 +118,7 @@ router.post("/search", async (req, res) => {
       recordBackendSearch(userEmail, ip);
       notifySearch({
         email: userEmail,
-        userQuery: clean(userQuery, 300),
+        userQuery: clean(userQuery, 1500),
         productType: clean(productType, 120),
         material: clean(material, 120),
         quantity: qty,
@@ -165,7 +165,7 @@ router.post("/search", async (req, res) => {
     cache.set(cacheKey, result);
     notifySearch({
       email: userEmail,
-      userQuery: clean(userQuery, 300),
+      userQuery: clean(userQuery, 1500),
       productType: clean(productType, 120),
       material: clean(material, 120),
       quantity: qty,
