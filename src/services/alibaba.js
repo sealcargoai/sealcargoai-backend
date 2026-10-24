@@ -291,7 +291,8 @@ function mapOffersToSuppliers(offerList, keyword) {
                 images: product.multiImage?.map(img =>
                     img.startsWith("//") ? `https:${img}` : img
                 ) || [],
-                rating: parseFloat(product.reviewScore) || 4.3,
+                // Real values only — null when Alibaba doesn't publish them
+                rating: parseFloat(product.reviewScore) || null,
                 reviews: parseInt(product.reviewCount) || 0,
                 moq: extractMOQ(product.moq),
                 price: normalizePrice(product.price),
@@ -299,8 +300,8 @@ function mapOffersToSuppliers(offerList, keyword) {
                 verified: !!product.goldSupplierYears,
                 location: product.countryCode || "CN",
                 yearsInBusiness:
-                    parseInt(product.goldSupplierYears?.match(/\d+/)?.[0]) || 1,
-                responseRate: 85,
+                    parseInt(String(product.goldSupplierYears || "").match(/\d+/)?.[0]) || 0,
+                responseRate: null, // not available in Alibaba search results
                 tags: [],
                 tradeAssurance: false,
                 goldSupplier: !!product.goldSupplierYears,

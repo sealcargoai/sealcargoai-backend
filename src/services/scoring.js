@@ -1,3 +1,14 @@
+// ── SEAL supplier filters ────────────────────────────────────────────────────
+// These are the rules shown on the results page. Every supplier must pass all
+// of them to be listed; the rest go to "filteredOut" with the reason.
+// Thresholds can be tuned with env vars without touching code.
+export const FILTERS = {
+  minRating:   parseFloat(process.env.FILTER_MIN_RATING) || 4.0, // only when the product has reviews
+  requireVerified: process.env.FILTER_REQUIRE_VERIFIED !== "false", // Gold Supplier on Alibaba
+  minYears:    parseInt(process.env.FILTER_MIN_YEARS) || 2,       // years as Gold Supplier
+  minAiScore:  parseInt(process.env.FILTER_MIN_SCORE) || 60,      // final weighted score
+};
+
 export function scoreSuppliers(suppliers, userRequirements) {
   const { budget = 50000, quantity = 1000 } = userRequirements;
   const budgetPerUnit = budget / quantity;
@@ -23,23 +34,21 @@ export function scoreSuppliers(suppliers, userRequirements) {
     }
 
     // ── 2. Quality Score (0-100) ──────────────────────────────────────────────
-    const rating       = supplier.rating  || 4.0;
-    const reviews      = supplier.reviews || 0;
-    const ratingScore  = (rating / 5) * 80;
-    const reviewScore  = Math.min(20, (reviews / 500) * 20);
-    const qualityScore = Math.round(ratingScore + reviewScore);
+    // No reviews → neutral 60, never an invented rating
+    const reviews = supplier.reviews || 0;
+    let qualityScore = 60;
+    if (supplier.rating) {
+      const ratingScore = (supplier.rating / 5) * 80;
+      const reviewScore = Math.min(20, (reviews / 100) * 20);
+      qualityScore = Math.round(ratingScore + reviewScore);
+    }
 
     // ── 3. Reliability Score (0-100) ──────────────────────────────────────────
-    const yearsInBusiness  = supplier.yearsInBusiness || 3;
-    const responseRate     = supplier.responseRate    || 85;
-    const yearsScore       = Math.min(40, yearsInBusiness * 3);
-    const responseScore    = (responseRate / 100) * 30;
-    const verifiedScore    = supplier.verified       ? 15 : 0;
-    const tradeScore       = supplier.tradeAssurance ? 10 : 0;
-    const goldScore        = supplier.goldSupplier   ? 5  : 0;
-    const reliabilityScore = Math.round(Math.min(100,
-      yearsScore + responseScore + verifiedScore + tradeScore + goldScore
-    ));
+    const years            = supplier.yearsInBusiness || 0;
+    const yearsScore       = Math.min(60, years * 6);
+    const verifiedScore    = supplier.verified       ? 25 : 0;
+    const tradeScore       = supplier.tradeAssurance ? 15 : 0;
+    const reliabilityScore = Math.round(Math.min(100, yearsScore + verifiedScore + tradeScore));
 
     // ── 4. MOQ Score (0-100) ──────────────────────────────────────────────────
     const moq = supplier.moq || 1;
@@ -55,6 +64,8 @@ export function scoreSuppliers(suppliers, userRequirements) {
       moqScore         * 0.10
     );
 
+    const rejectReason = getRejectReason({ ...supplier, aiScore });
+
     return {
       ...supplier,
       priceScore:       Math.round(priceScore),
@@ -62,24 +73,47 @@ export function scoreSuppliers(suppliers, userRequirements) {
       reliabilityScore: Math.round(reliabilityScore),
       moqScore:         Math.round(moqScore),
       aiScore,
-      isQualified:      true,
+      isQualified:      !rejectReason,
+      rejectReason,
     };
   });
 
   return scored.sort((a, b) => b.aiScore - a.aiScore);
 }
 
+// First filter the supplier fails, in Spanish (shown to the user), or null
+function getRejectReason(s) {
+  if (s.rating && s.reviews > 0 && s.rating < FILTERS.minRating) {
+    return `Calificación ${s.rating.toFixed(1)} por debajo de ${FILTERS.minRating.toFixed(1)}`;
+  }
+  if (FILTERS.requireVerified && !s.verified) {
+    return "Proveedor no verificado (no es Gold Supplier)";
+  }
+  if ((s.yearsInBusiness || 0) < FILTERS.minYears) {
+    return `Menos de ${FILTERS.minYears} años como proveedor verificado`;
+  }
+  if (s.aiScore < FILTERS.minAiScore) {
+    return `Puntuación ${s.aiScore}/100, debajo del mínimo de ${FILTERS.minAiScore}`;
+  }
+  return null;
+}
+
 export function categorizeSuppliers(scoredSuppliers) {
-  console.log("Scored suppliers:", scoredSuppliers.slice(0, 5).map(s => ({
-    name:    s.name.slice(0, 40),
-    price:   s.price,
-    aiScore: s.aiScore,
-  })));
+  const qualified = scoredSuppliers.filter((s) => s.isQualified);
+  const rejected  = scoredSuppliers.filter((s) => !s.isQualified);
+
+  console.log(`Filters: ${qualified.length} qualified / ${rejected.length} filtered out`);
 
   return {
-    topSuppliers:   scoredSuppliers.slice(0, 9),
-    filteredOut:    [],
+    topSuppliers:   qualified.slice(0, 9),
+    filteredOut:    rejected.slice(0, 20).map((s) => ({
+      name:   s.name,
+      reason: s.rejectReason,
+      rating: s.rating,
+      aiScore: s.aiScore,
+    })),
     totalAnalyzed:  scoredSuppliers.length,
-    qualifiedCount: scoredSuppliers.length,
+    qualifiedCount: qualified.length,
+    filters:        FILTERS,
   };
 }
