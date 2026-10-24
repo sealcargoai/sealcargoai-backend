@@ -149,8 +149,8 @@ router.post("/search", async (req, res) => {
 
     console.log(`✅ Done: ${result.qualifiedCount} suppliers returned\n`);
     
-    // No results at all (Alibaba blocked / nothing found) are not counted.
-    // Results where every supplier failed the filters DO count — that's real info.
+    // No results at all (Alibaba blocked / nothing related) are not counted,
+    // and neither are results where every supplier failed the filters.
     if (!result?.totalAnalyzed) {
       const noRelevantMatches = (rawSuppliers?.offerCount || 0) > 0;
       console.log(noRelevantMatches
@@ -165,10 +165,12 @@ router.post("/search", async (req, res) => {
         message: noRelevantMatches
           ? "Results did not match the described product."
           : "No live results from Alibaba (blocked or no matches).",
+        remainingSearches: remainingSearches(userEmail, ip),
       });
     }
 
-    recordBackendSearch(userEmail, ip);
+    // Only searches that showed options use a free search
+    if (result.topSuppliers?.length > 0) recordBackendSearch(userEmail, ip);
     cache.set(cacheKey, result);
     notifySearch({
       email: userEmail,
