@@ -3,7 +3,15 @@ import NodeCache from "node-cache";
 import { searchSuppliers } from "../services/alibaba.js";
 import { scoreSuppliers, categorizeSuppliers } from "../services/scoring.js";
 import { refineKeyword } from "./ai.js";
-import { clientIp } from "../middleware/security.js";
+import { clientIp, clean } from "../middleware/security.js";
+import { sendSearchLead } from "../services/email.js";
+
+// Send the search to SEAL sales without delaying the user's response
+function notifySearch(details) {
+  sendSearchLead(details).catch((err) =>
+    console.error("⚠️ Search lead email failed:", err.message),
+  );
+}
 
 // ── Free search limit, enforced on the server ───────────────────────────────
 // Per email (3 free searches) and per IP (stops people switching emails or
@@ -108,6 +116,18 @@ router.post("/search", async (req, res) => {
     if (cached) {
       console.log("⚡ Cache hit\n");
       recordBackendSearch(userEmail, ip);
+      notifySearch({
+        email: userEmail,
+        userQuery: clean(userQuery, 300),
+        productType: clean(productType, 120),
+        material: clean(material, 120),
+        quantity: qty,
+        budget: bdg,
+        destination: clean(destination, 60),
+        searchKeyword: keyword,
+        qualifiedCount: cached.qualifiedCount,
+        topSupplier: cached.topSuppliers?.[0]?.name,
+      });
       return res.json({
         ...cached,
         fromCache: true,
@@ -143,6 +163,18 @@ router.post("/search", async (req, res) => {
 
     recordBackendSearch(userEmail, ip);
     cache.set(cacheKey, result);
+    notifySearch({
+      email: userEmail,
+      userQuery: clean(userQuery, 300),
+      productType: clean(productType, 120),
+      material: clean(material, 120),
+      quantity: qty,
+      budget: bdg,
+      destination: clean(destination, 60),
+      searchKeyword: keyword,
+      qualifiedCount: result.qualifiedCount,
+      topSupplier: result.topSuppliers?.[0]?.name,
+    });
     res.json({
       ...result,
       fromCache: false,
