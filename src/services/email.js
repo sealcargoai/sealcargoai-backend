@@ -146,32 +146,45 @@ export async function sendReportToUser({
   totalCost,
 }) {
   const resend = getResendClient();
+  const attachments = pdfBuffer
+    ? [{ filename: `SEAL_Informe_${Date.now()}.pdf`, content: pdfBuffer }]
+    : [];
 
   const content = `
-    <h2>📄 Your Import Report</h2>
-    <p>Hello ${e(recipientName || "")}</p>
-    <p>Supplier: ${e(supplierName)}</p>
-    <p>Total Cost: $${e(Number(totalCost || 0).toLocaleString("en-US"))}</p>
+    <h2>📄 Su informe de importación</h2>
+    <p>Hola ${e(recipientName || "")}</p>
+    <p>Proveedor: ${e(supplierName)}</p>
+    <p>Costo total estimado: $${e(Number(totalCost || 0).toLocaleString("en-US"))}</p>
   `;
 
   const { data, error } = await resend.emails.send({
     from: FROM_EMAIL,
     to: recipientEmail,
     bcc: adminEmails,
-    subject: `Your SEAL Report - ${supplierName}`,
-    html: emailWrapper("Import Analysis Report", content),
-    attachments: pdfBuffer
-      ? [
-          {
-            filename: `SEAL_Report_${Date.now()}.pdf`,
-            content: pdfBuffer,
-          },
-        ]
-      : [],
+    subject: `Su informe SEAL - ${String(supplierName).replace(/[\r\n]/g, " ")}`,
+    html: emailWrapper("Informe de análisis de importación", content),
+    attachments,
   });
 
-  if (error) throw new Error(error.message);
-  return data;
+  if (!error) return { delivered: true, data };
+
+  // Resend can refuse external recipients (e.g. sender domain not verified).
+  // Don't lose the lead: send the report to SEAL sales so they forward it.
+  console.error("⚠️ Report to client failed, forwarding to SEAL:", error.message);
+  const fwd = await resend.emails.send({
+    from: FROM_EMAIL,
+    to: adminEmails,
+    replyTo: recipientEmail,
+    subject: `REENVIAR informe a cliente: ${recipientEmail}`,
+    html: emailWrapper(
+      "Informe pendiente de reenviar",
+      `<p><b>No se pudo enviar el informe directo al cliente.</b> Reenvíelo a <b>${e(recipientEmail)}</b>.</p>
+       <p>Motivo técnico: ${e(error.message)}</p>${content}`,
+    ),
+    attachments,
+  });
+  if (fwd.error) throw new Error(fwd.error.message);
+  return { delivered: false, forwarded: true };
 }
 
 /* ✅ Optional default export (not required but safe) */
