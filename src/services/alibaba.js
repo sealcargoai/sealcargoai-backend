@@ -268,8 +268,40 @@ function calculateRelevance(title, keyword) {
 /* ─────────────────────────────────────────────
    Map Offers → Suppliers
 ───────────────────────────────────────────── */
+// Logs only the FIELD NAMES of the first offers (plus values of trust-related
+// fields, which are public supplier data) so we can map Verified Supplier,
+// Trade Assurance, on-time delivery, etc. Runs for the first 3 searches per boot.
+let fieldLogsLeft = 3;
+const TRUST_KEY = /verif|assess|audit|trade|assur|deliver|ontime|response|reorder|repurchase|level|star|gold|year|transaction|service|tag|badge|cert/i;
+function logOfferFields(offers) {
+    if (fieldLogsLeft <= 0 || !offers.length) return;
+    fieldLogsLeft -= 1;
+    try {
+        const o = offers[0];
+        const describe = (obj) =>
+            Object.keys(obj || {}).map((k) => {
+                const v = obj[k];
+                const t = Array.isArray(v) ? "array" : typeof v;
+                return t === "object" && v ? `${k}{${Object.keys(v).slice(0, 25).join(",")}}` : `${k}:${t}`;
+            }).join(" | ");
+        console.log("🔎 Alibaba offer fields:", describe(o).slice(0, 4000));
+        const trust = {};
+        for (const off of offers.slice(0, 5)) {
+            for (const [k, v] of Object.entries(off)) {
+                if (TRUST_KEY.test(k) && (typeof v !== "object" || v === null || Array.isArray(v))) {
+                    (trust[k] ||= []).push(Array.isArray(v) ? JSON.stringify(v).slice(0, 120) : v);
+                }
+            }
+        }
+        console.log("🔎 Alibaba trust-related values:", JSON.stringify(trust).slice(0, 4000));
+    } catch (e) {
+        console.log("🔎 field log failed:", e.message);
+    }
+}
+
 function mapOffersToSuppliers(offerList, keyword) {
     const offers = offerList?.offerResultData?.offers || [];
+    logOfferFields(offers);
 
     return offers
         .map((product, index) => {
@@ -303,7 +335,9 @@ function mapOffersToSuppliers(offerList, keyword) {
                     parseInt(String(product.goldSupplierYears || "").match(/\d+/)?.[0]) || 0,
                 responseRate: null, // not available in Alibaba search results
                 tags: [],
-                tradeAssurance: false,
+                // Unknown until we confirm which Alibaba fields carry them (see logOfferFields)
+                tradeAssurance: null,
+                verifiedSupplier: null,
                 goldSupplier: !!product.goldSupplierYears,
                 contactEmail: "",
                 contactPhone: "",
