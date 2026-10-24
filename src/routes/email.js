@@ -79,14 +79,14 @@ router.post("/report", async (req, res) => {
       }
     }
 
-    await sendReportToUser({
+    const result = await sendReportToUser({
       recipientEmail,
       recipientName: clean(b.recipientName, 120),
       pdfBuffer,
       supplierName: clean(b.supplierName, 200),
       totalCost: Number(b.totalCost) || 0,
     });
-    res.json({ success: true });
+    res.json({ success: true, delivered: result.delivered, forwarded: !!result.forwarded });
   } catch (err) {
     console.error("❌ /email/report:", err.message);
     res.status(500).json({ error: "Could not send email" });
