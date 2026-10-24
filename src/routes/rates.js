@@ -2,13 +2,12 @@ import express from "express";
 import axios from "axios";
 
 // ── Freight & cost rates ─────────────────────────────────────────────────────
-// Read from a Google Sheet so SEAL can update them without touching code.
-// Sheet layout (tab "Tarifas"): column A = key, column B = value, column C = description.
-// The sheet must be shared as "Anyone with the link → Viewer".
+// SEAL keeps its rates in code (DEFAULT_RATES below and the frontend calculator).
+// Optional: set RATES_SHEET_ID in Railway to read them from a Google Sheet
+// (tab "Tarifas": column A = key, column B = value; shared "Anyone with the link → Viewer").
 const router = express.Router();
 
-// Default: "Tarifas SEAL SmartTrade AI" in SEAL's Google Drive
-const SHEET_ID = process.env.RATES_SHEET_ID || "14jj__AJn3-dQ_-JIhgjSl6EQYI1a6gaMDkcnW7d4kHI";
+const SHEET_ID = process.env.RATES_SHEET_ID || ""; // no sheet unless explicitly configured
 const SHEET_TAB = process.env.RATES_SHEET_TAB || "Tarifas";
 const CACHE_MS = 60 * 60 * 1000; // 1 hour
 
