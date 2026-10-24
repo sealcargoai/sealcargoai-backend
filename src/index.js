@@ -6,6 +6,7 @@ import cors from "cors";
 import suppliersRouter from "./routes/suppliers.js";
 import aiRouter from "./routes/ai.js";
 import emailRoutes from "./routes/email.js";
+import ratesRouter from "./routes/rates.js";
 import { corsOrigin, rateLimit } from "./middleware/security.js";
 
 
@@ -34,6 +35,7 @@ app.use("/api/suppliers/search", searchLimiter);
 app.use("/api/suppliers", suppliersRouter);
 app.use("/api/ai", aiLimiter, aiRouter);
 app.use("/api/email", emailLimiter, emailRoutes);
+app.use("/api/rates", ratesRouter);
 
 
 // Root route — no more "Cannot GET /"
