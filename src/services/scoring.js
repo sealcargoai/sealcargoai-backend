@@ -65,16 +65,21 @@ function criteria(s, meanRating) {
     ? { score: Math.round(perf.reduce((a, b) => a + b, 0) / perf.length), detail: perfTxt.join(" · ") }
     : { score: null, detail: "N/D" };
 
-  // 4. Reputation — rating adjusted by review count
+  // 4. Reputation — product rating adjusted by review count + supplier service score
   const reviews = s.reviews || 0;
-  const reputation = s.rating && reviews > 0
-    ? (() => {
-        const adj = (reviews / (reviews + BAYES_M)) * s.rating + (BAYES_M / (reviews + BAYES_M)) * meanRating;
-        return {
-          score: Math.round(clamp(((adj - 3) / 2) * 100)),
-          detail: `${s.rating.toFixed(1)} con ${reviews} reseñas (ajustado ${adj.toFixed(2)})`,
-        };
-      })()
+  const repParts = [];
+  const repTxt = [];
+  if (s.rating && reviews > 0) {
+    const adj = (reviews / (reviews + BAYES_M)) * s.rating + (BAYES_M / (reviews + BAYES_M)) * meanRating;
+    repParts.push(clamp(((adj - 3) / 2) * 100));
+    repTxt.push(`${s.rating.toFixed(1)} con ${reviews} reseñas (ajustado ${adj.toFixed(2)})`);
+  }
+  if (isNum(s.storeRating) && s.storeRating > 0) {
+    repParts.push(clamp(((s.storeRating - 3) / 2) * 100));
+    repTxt.push(`servicio del proveedor ${s.storeRating.toFixed(1)}/5`);
+  }
+  const reputation = repParts.length
+    ? { score: Math.round(repParts.reduce((a, b) => a + b, 0) / repParts.length), detail: repTxt.join(" · ") }
     : { score: null, detail: "Sin reseñas" };
 
   // 5. Payment protection — only when the field is known

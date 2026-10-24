@@ -271,8 +271,8 @@ function calculateRelevance(title, keyword) {
 // Logs only the FIELD NAMES of the first offers (plus values of trust-related
 // fields, which are public supplier data) so we can map Verified Supplier,
 // Trade Assurance, on-time delivery, etc. Runs for the first 3 searches per boot.
-let fieldLogsLeft = 3;
-const TRUST_KEY = /verif|assess|audit|trade|assur|deliver|ontime|response|reorder|repurchase|level|star|gold|year|transaction|service|tag|badge|cert/i;
+let fieldLogsLeft = 5;
+const TRUST_KEY = /verif|assess|audit|trade|assur|deliver|ontime|response|reorder|repurchase|level|star|gold|year|transaction|service|tag|badge|cert|crown|score|lyb/i;
 function logOfferFields(offers) {
     if (fieldLogsLeft <= 0 || !offers.length) return;
     fieldLogsLeft -= 1;
@@ -297,6 +297,27 @@ function logOfferFields(offers) {
     } catch (e) {
         console.log("🔎 field log failed:", e.message);
     }
+}
+
+// Collects every "name" found inside Alibaba's icon/badge structures
+// (e.g. certifications: [{prefixIcons:[{name:"CE", url:...}]}])
+function collectNames(value, out = new Set(), depth = 0) {
+    if (depth > 5 || value == null) return out;
+    if (typeof value === "string") {
+        const tr = value.trim();
+        if (tr.startsWith("[") || tr.startsWith("{")) {
+            try { collectNames(JSON.parse(value), out, depth + 1); } catch { /* not JSON */ }
+        }
+        return out;
+    }
+    if (Array.isArray(value)) { value.forEach((v) => collectNames(v, out, depth + 1)); return out; }
+    if (typeof value === "object") {
+        for (const [k, v] of Object.entries(value)) {
+            if ((k === "name" || k === "text" || k === "title") && typeof v === "string" && v.trim() && v.length < 60) out.add(v.trim());
+            else collectNames(v, out, depth + 1);
+        }
+    }
+    return out;
 }
 
 function mapOffersToSuppliers(offerList, keyword) {
@@ -335,9 +356,13 @@ function mapOffersToSuppliers(offerList, keyword) {
                     parseInt(String(product.goldSupplierYears || "").match(/\d+/)?.[0]) || 0,
                 responseRate: null, // not available in Alibaba search results
                 tags: [],
-                // Unknown until we confirm which Alibaba fields carry them (see logOfferFields)
-                tradeAssurance: null,
-                verifiedSupplier: null,
+                // Trust data published in the search result
+                storeRating: parseFloat(product.supplierServiceScore) || null, // supplier service score (0-5)
+                certifications: [...collectNames(product.certifications)].slice(0, 8), // declared by the supplier
+                badges: [...collectNames(product.badges)].slice(0, 8),
+                // Verified only when Alibaba's own badge says so; otherwise unknown
+                verifiedSupplier: [...collectNames(product.badges)].some((b) => /verified/i.test(b)) ? true : null,
+                tradeAssurance: null, // not published in search results
                 goldSupplier: !!product.goldSupplierYears,
                 contactEmail: "",
                 contactPhone: "",
