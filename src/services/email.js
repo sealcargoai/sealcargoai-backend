@@ -16,6 +16,12 @@ function getResendClient() {
 
 // Leads always go to SEAL sales; ADMIN_EMAIL / ADMIN2_EMAIL get a copy if set
 const LEADS_EMAIL = process.env.LEADS_EMAIL || "ventas@seal.com.gt";
+
+// Test records (fictitious name/email) are flagged so sales doesn't follow them up
+const TEST_RE = /\b(prueba|test|testing|ficticio|ficticia|demo|fake|ejemplo)\b|@(example|test|prueba|mailinator)\./i;
+function testTag(...values) {
+  return values.some((v) => TEST_RE.test(String(v || ""))) ? "[PRUEBA] " : "";
+}
 const adminEmails = [...new Set(
   [LEADS_EMAIL, process.env.ADMIN_EMAIL, process.env.ADMIN2_EMAIL]
     .filter(Boolean)
@@ -62,7 +68,7 @@ export async function sendLeadNotification({ name, email, query }) {
     from: FROM_EMAIL,
     to: adminEmails,
     replyTo: email,
-    subject: `New Lead from ${name.replace(/[\r\n]/g, " ")}`,
+    subject: `${testTag(name, email)}Nuevo prospecto: ${name.replace(/[\r\n]/g, " ")}`,
     html: emailWrapper("New Lead Notification", content),
   });
 
@@ -104,7 +110,7 @@ export async function sendSearchLead({
     from: FROM_EMAIL,
     to: adminEmails,
     ...(email ? { replyTo: email } : {}),
-    subject: `Búsqueda: ${String(userQuery || productType || "producto").replace(/[\r\n]/g, " ").slice(0, 80)}${email ? " — " + email : ""}`,
+    subject: `${testTag(email, userQuery)}Búsqueda: ${String(userQuery || productType || "producto").replace(/[\r\n]/g, " ").slice(0, 80)}${email ? " — " + email : ""}`,
     html: emailWrapper("Nuevo prospecto calificado", content),
   });
 
@@ -127,7 +133,7 @@ export async function sendQuoteRequest(data) {
     from: FROM_EMAIL,
     to: adminEmails,
     replyTo: data.email,
-    subject: `${data.requestType || "Solicitud de cotización"} — ${String(data.name).replace(/[\r\n]/g, " ")}`,
+    subject: `${testTag(data.name, data.email)}${data.requestType || "Solicitud de cotización"} — ${String(data.name).replace(/[\r\n]/g, " ")}`,
     html: emailWrapper("Quote Request", content),
   });
 
@@ -176,7 +182,7 @@ export async function sendReportToUser({
     from: FROM_EMAIL,
     to: adminEmails,
     replyTo: recipientEmail,
-    subject: `REENVIAR informe a cliente: ${recipientEmail}`,
+    subject: `${testTag(recipientName, recipientEmail)}REENVIAR informe a cliente: ${recipientEmail}`,
     html: emailWrapper(
       "Informe pendiente de reenviar",
       `<p><b>No se pudo enviar el informe directo al cliente.</b> Reenvíelo a <b>${e(recipientEmail)}</b>.</p>

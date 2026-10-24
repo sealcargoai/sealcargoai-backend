@@ -24,8 +24,14 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 /* ─────────────────────────────────────────────
    Fetch HTML From Oxylabs
 ───────────────────────────────────────────── */
+// Whole search must finish within this budget so the client never waits
+// indefinitely (the frontend gives up a bit later and offers a way out).
+const SEARCH_BUDGET_MS = parseInt(process.env.SEARCH_BUDGET_MS) || 75000;
+
 async function fetchAlibabaHtml(keyword) {
   const url = buildAlibabaSearchUrl(keyword);
+  const deadline = Date.now() + SEARCH_BUDGET_MS;
+  const remaining = () => deadline - Date.now();
 
   // ✅ 1) Try Oxylabs Web Unblocker proxy first (up to 3 retries)
   const ubUser = process.env.OXY_UNBLOCK_USER;
@@ -44,6 +50,7 @@ async function fetchAlibabaHtml(keyword) {
     const MAX_RETRIES = 3;
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      if (remaining() < 20000) break; // keep time for the Scraper API fallback
       const proxyUrl = proxyUrls[(attempt - 1) % proxyUrls.length];
       try {
         console.log(`🛡️ Web Unblocker attempt ${attempt}/${MAX_RETRIES}...`);
@@ -54,7 +61,7 @@ async function fetchAlibabaHtml(keyword) {
         const resp = await axios.get(url, {
           httpsAgent: agent,
           proxy: false,
-          timeout: 60000,
+          timeout: Math.max(5000, Math.min(30000, remaining() - 20000)),
           responseType: "text",
           transformResponse: (r) => r,
           headers: {
@@ -82,13 +89,16 @@ async function fetchAlibabaHtml(keyword) {
 
         console.warn(`⚠️ Unblocker attempt ${attempt} returned CAPTCHA or short HTML.`);
       } catch (e) {
-        console.error(
-          `❌ Unblocker attempt ${attempt} failed:`,
-          e.response?.status || e.message
-        );
+        const status = e.response?.status;
+        console.error(`❌ Unblocker attempt ${attempt} failed:`, status || e.message);
+        // Bad credentials won't fix themselves on retry: go straight to the fallback
+        if (status === 401 || status === 407) {
+          console.warn("🔑 Web Unblocker rejected the credentials (OXY_UNBLOCK_USER/PASS) — skipping retries");
+          break;
+        }
       }
 
-      if (attempt < MAX_RETRIES) {
+      if (attempt < MAX_RETRIES && remaining() > 25000) {
         await sleep(1500 * attempt);
       }
     }
@@ -115,6 +125,10 @@ async function fetchAlibabaHtml(keyword) {
 
   for (const { source, proxy_type } of scraperSources) {
     for (let attempt = 1; attempt <= 2; attempt++) {
+      if (remaining() < 8000) {
+        console.warn(`⏱️ Search time budget used up (${SEARCH_BUDGET_MS / 1000}s) — returning no results`);
+        return null;
+      }
       try {
         console.log(`🔄 Fallback: Oxylabs Web Scraper API (source: '${source}', attempt ${attempt}/2)`);
         
@@ -135,7 +149,7 @@ async function fetchAlibabaHtml(keyword) {
           payload,
           {
             auth: { username, password },
-            timeout: 60000,
+            timeout: Math.min(60000, remaining()),
           }
         );
 
@@ -155,7 +169,7 @@ async function fetchAlibabaHtml(keyword) {
         console.error(`❌ Scraper API ('${source}' attempt ${attempt}) failed:`, err.response?.data?.error || err.message);
       }
 
-      await sleep(1000);
+      if (remaining() > 10000) await sleep(1000);
     }
   }
 
