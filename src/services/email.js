@@ -144,6 +144,7 @@ export async function sendReportToUser({
   pdfBuffer,
   supplierName,
   totalCost,
+  totalCostText,
 }) {
   const resend = getResendClient();
   const attachments = pdfBuffer
@@ -154,7 +155,7 @@ export async function sendReportToUser({
     <h2>📄 Su informe de importación</h2>
     <p>Hola ${e(recipientName || "")}</p>
     <p>Proveedor: ${e(supplierName)}</p>
-    <p>Costo total estimado: $${e(Number(totalCost || 0).toLocaleString("en-US"))}</p>
+    <p>Costo total estimado: ${e(totalCostText || "US$" + Number(totalCost || 0).toLocaleString("en-US"))}</p>
   `;
 
   const { data, error } = await resend.emails.send({
