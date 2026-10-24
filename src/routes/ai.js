@@ -261,7 +261,9 @@ export async function refineKeyword({ userQuery, productType, material }) {
     return fallbackClean;
   }
 
-  const modelsToTry = ["groq/compound-mini", "qwen/qwen3.8-27b"];
+  // groq/compound-mini was retired by Groq. The model can be changed with
+  // GROQ_KEYWORD_MODEL without touching code; the qwen model is the fallback.
+  const modelsToTry = [...new Set([process.env.GROQ_KEYWORD_MODEL, "qwen/qwen3.8-27b"].filter(Boolean))];
 
   for (const model of modelsToTry) {
     try {
