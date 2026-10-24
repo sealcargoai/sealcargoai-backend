@@ -98,9 +98,29 @@ function getRejectReason(s) {
   return null;
 }
 
+// Alibaba lists every product separately, so one factory can appear many times.
+// Keep only the best-scored product per company (list is already sorted by score).
+function companyKey(s) {
+  return String(s.name || "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function dedupeByCompany(list, exclude = new Set()) {
+  const seen = new Set(exclude);
+  return list.filter((s) => {
+    const key = companyKey(s);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 export function categorizeSuppliers(scoredSuppliers) {
-  const qualified = scoredSuppliers.filter((s) => s.isQualified);
-  const rejected  = scoredSuppliers.filter((s) => !s.isQualified);
+  const qualified = dedupeByCompany(scoredSuppliers.filter((s) => s.isQualified));
+  // A company already listed as qualified is not shown again as "filtered"
+  const rejected  = dedupeByCompany(
+    scoredSuppliers.filter((s) => !s.isQualified),
+    new Set(qualified.map(companyKey)),
+  );
 
   console.log(`Filters: ${qualified.length} qualified / ${rejected.length} filtered out`);
 
