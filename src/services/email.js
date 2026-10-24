@@ -14,10 +14,13 @@ function getResendClient() {
   return new Resend(apiKey);
 }
 
-const adminEmails = [
-  process.env.ADMIN_EMAIL,
-  process.env.ADMIN2_EMAIL,
-].filter(Boolean);
+// Leads always go to SEAL sales; ADMIN_EMAIL / ADMIN2_EMAIL get a copy if set
+const LEADS_EMAIL = process.env.LEADS_EMAIL || "ventas@seal.com.gt";
+const adminEmails = [...new Set(
+  [LEADS_EMAIL, process.env.ADMIN_EMAIL, process.env.ADMIN2_EMAIL]
+    .filter(Boolean)
+    .map((x) => x.trim().toLowerCase()),
+)];
 
 const FROM_EMAIL =
   process.env.RESEND_FROM ||
@@ -61,6 +64,48 @@ export async function sendLeadNotification({ name, email, query }) {
     replyTo: email,
     subject: `New Lead from ${name.replace(/[\r\n]/g, " ")}`,
     html: emailWrapper("New Lead Notification", content),
+  });
+
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+/* ─────────────────────────────────────────────
+   1️⃣b Search Lead — every successful supplier search
+───────────────────────────────────────────── */
+export async function sendSearchLead({
+  email, userQuery, productType, material, quantity, budget,
+  destination, searchKeyword, qualifiedCount, topSupplier,
+}) {
+  const resend = getResendClient();
+  const row = (label, value) =>
+    value || value === 0
+      ? `<tr><td style="padding:6px 12px;color:#64748b;">${label}</td><td style="padding:6px 12px;"><b>${e(value)}</b></td></tr>`
+      : "";
+
+  const content = `
+    <h2>🔎 Nueva búsqueda en SmartTrade AI</h2>
+    <table style="border-collapse:collapse;width:100%;">
+      ${row("Correo", email || "sin correo")}
+      ${row("Lo que busca", userQuery)}
+      ${row("Tipo de producto", productType)}
+      ${row("Material", material)}
+      ${row("Cantidad", quantity)}
+      ${row("Presupuesto (US$)", budget)}
+      ${row("Destino", destination)}
+      ${row("Palabra clave usada", searchKeyword)}
+      ${row("Proveedores calificados", qualifiedCount)}
+      ${row("Mejor proveedor", topSupplier)}
+    </table>
+    <p style="color:#64748b;font-size:13px;">Responda a este correo para escribirle directo al prospecto.</p>
+  `;
+
+  const { data, error } = await resend.emails.send({
+    from: FROM_EMAIL,
+    to: adminEmails,
+    ...(email ? { replyTo: email } : {}),
+    subject: `Búsqueda: ${String(userQuery || productType || "producto").replace(/[\r\n]/g, " ").slice(0, 80)}${email ? " — " + email : ""}`,
+    html: emailWrapper("Nuevo prospecto calificado", content),
   });
 
   if (error) throw new Error(error.message);
@@ -132,6 +177,7 @@ export async function sendReportToUser({
 /* ✅ Optional default export (not required but safe) */
 export default {
   sendLeadNotification,
+  sendSearchLead,
   sendQuoteRequest,
   sendReportToUser,
 };
