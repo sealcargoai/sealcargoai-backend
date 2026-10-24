@@ -137,10 +137,12 @@ export function scoreSuppliers(suppliers, userRequirements = {}) {
     };
   });
 
+  // Order: trust level, then closeness to the client's product, then price
   const levelRank = { A: 3, B: 2, C: 1, D: 0 };
   return scored.sort(
     (a, b) =>
       levelRank[b.trustLevel] - levelRank[a.trustLevel] ||
+      (b.relevance ?? 0) - (a.relevance ?? 0) ||
       (a.price > 0 ? a.price : Infinity) - (b.price > 0 ? b.price : Infinity) ||
       b.trustScore - a.trustScore,
   );

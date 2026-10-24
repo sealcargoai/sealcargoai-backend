@@ -266,17 +266,43 @@ function extractMOQ(text) {
 /* ─────────────────────────────────────────────
    Fuzzy Relevance Scoring
 ───────────────────────────────────────────── */
+// Generic words appear in almost every Alibaba title ("machine", "industrial"…),
+// so they don't prove the product is the one the client described.
+const GENERIC_WORDS = new Set([
+    "machine", "machines", "machinery", "industrial", "industry", "equipment", "equipments",
+    "product", "products", "supplier", "suppliers", "manufacturer", "factory", "wholesale",
+    "high", "quality", "new", "best", "hot", "sale", "selling", "automatic", "auto", "full",
+    "commercial", "professional", "custom", "customized", "small", "large", "mini", "big",
+    "multi", "function", "multifunctional", "type", "model", "for", "and", "the", "of", "with",
+    "in", "a", "an", "to", "use", "used", "price", "cheap", "china", "chinese", "good",
+]);
+
+// Light stemming so "processing" / "processor" / "processors" compare as "process"
+const normWord = (w) => {
+    let x = w.replace(/[^a-z0-9]/g, "");
+    if (x.length > 4) x = x.replace(/ies$/, "y").replace(/(es|s)$/, "");
+    if (x.length > 5) x = x.replace(/(ing|ion|ors|or|ers|er|ed)$/, "");
+    return x;
+};
+
+/**
+ * Share of the meaningful keyword terms found in the product title (0..1).
+ * ok = enough of the meaningful terms appear to call it the same product:
+ * all of them when there are 1-2, at least 60% when there are more.
+ */
 function calculateRelevance(title, keyword) {
     const cleanTitle = title.replace(/<[^>]+>/g, "").toLowerCase();
-    const keywordWords = keyword.toLowerCase().split(/\s+/).filter(Boolean);
+    const titleWords = new Set(cleanTitle.split(/[^a-z0-9]+/).filter(Boolean).map(normWord));
+    const words = keyword.toLowerCase().split(/\s+/).filter(Boolean);
+    let terms = [...new Set(words.filter((w) => !GENERIC_WORDS.has(w)).map(normWord).filter(Boolean))];
+    if (!terms.length) terms = [...new Set(words.map(normWord).filter(Boolean))];
+    if (!terms.length) return { score: 0, ok: false };
 
-    let score = 0;
-
-    keywordWords.forEach(word => {
-        if (cleanTitle.includes(word)) score += 1;
-    });
-
-    return score;
+    const hits = terms.filter((t) => titleWords.has(t) || cleanTitle.includes(t)).length;
+    const share = hits / terms.length;
+    const needed = terms.length <= 2 ? 1 : 0.6;
+    const phraseBonus = cleanTitle.includes(keyword.toLowerCase()) ? 0.1 : 0;
+    return { score: Math.min(1, share + phraseBonus), ok: share >= needed };
 }
 
 /* ─────────────────────────────────────────────
@@ -343,9 +369,9 @@ function mapOffersToSuppliers(offerList, keyword) {
             const rawTitle = product.title || "";
             const cleanTitle = rawTitle.replace(/<[^>]+>/g, "").toLowerCase();
 
-            const relevance = calculateRelevance(rawTitle, keyword);
-
-            if (relevance === 0) return null;
+            const rel = calculateRelevance(rawTitle, keyword);
+            if (!rel.ok) return null;
+            const relevance = Math.round(rel.score * 100) / 100;
 
             return {
                 id: index + 1,
@@ -411,9 +437,13 @@ async function searchAlibabaScraper({ keyword, pageSize = 20 }) {
     }
 
     const suppliers = mapOffersToSuppliers(offerList, keyword);
-    console.log(`✅ Scraped and mapped ${suppliers.length} suppliers for keyword "${keyword}"`);
+    const offerCount = offerList?.offerResultData?.offers?.length || 0;
+    console.log(`✅ Mapped ${suppliers.length} related suppliers of ${offerCount} offers for keyword "${keyword}"`);
 
-    return suppliers.slice(0, pageSize);
+    const result = suppliers.slice(0, pageSize);
+    // The platform returned products, but none matched the client's product
+    result.offerCount = offerCount;
+    return result;
 }
 
 /* ─────────────────────────────────────────────
