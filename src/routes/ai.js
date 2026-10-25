@@ -123,7 +123,7 @@ router.post("/costs", async (req, res) => {
       {
         label: "Product Cost",
         amount: productCost,
-        details: `${qty.toLocaleString()} units × $${pricePerUnit.toFixed(2)} per unit`,
+        details: `${qty.toLocaleString()} ${qty === 1 ? "unit" : "units"} × $${pricePerUnit.toFixed(2)} per unit`,
         color: "#0B3C5D",
       },
       {
