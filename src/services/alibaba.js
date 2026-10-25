@@ -239,19 +239,15 @@ function extractOfferList(html) {
    Normalize Price (Range → Average)
 ───────────────────────────────────────────── */
 function normalizePrice(priceText) {
-    if (!priceText) return 0;
-
-    const clean = priceText.replace(/\$/g, "").replace(/,/g, "").trim();
-
-    if (clean.includes("-")) {
-        const parts = clean.split("-").map(p => parseFloat(p));
-        if (parts.length === 2) {
-            return (parts[0] + parts[1]) / 2;
-        }
-        return parts[0] || 0;
-    }
-
-    return parseFloat(clean) || 0;
+    // Reads "$0.02-0.05", "US$0.02 - 0.05", "$1,200.00"… (midpoint of a range)
+    const nums = String(priceText || "")
+        .replace(/,/g, "")
+        .match(/\d+(?:\.\d+)?/g)
+        ?.map(Number)
+        .filter((n) => n > 0) ?? [];
+    if (!nums.length) return 0;
+    if (nums.length >= 2) return (nums[0] + nums[1]) / 2;
+    return nums[0];
 }
 
 /* ─────────────────────────────────────────────
