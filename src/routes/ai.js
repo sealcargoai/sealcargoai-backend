@@ -251,13 +251,17 @@ export async function refineKeyword({ userQuery, productType, material }) {
 
   // Used only if the AI fails: product words only (no commas, quantities or filler)
   const STOP = /^(de|del|la|las|el|los|un|una|unos|unas|para|por|con|sin|y|o|en|a|al|que|necesito|quiero|busco|importar|comprar|paquete|paquetes|caja|cajas|unidades?|piezas?|estudiantes?|ni[nñ]os?|escolares?|the|of|for|and|with|a|an|to|pack|units?|pieces?)$/i;
-  const fallbackClean = rawInput
+  // What the client rules out ("no para carne ni pintura") never goes into the keyword
+  const productWords = (text) => text
     .replace(/["'`\n.,;:()!?¿¡]/g, " ")
     .split(/\s+/)
     .filter((w) => w && !/\d/.test(w) && !STOP.test(w))
     .slice(0, 4)
     .join(" ")
     .trim();
+  const withoutExclusions = rawInput.toLowerCase().replace(/\b(?:no|ni|excepto|salvo|not|nor|except)\b[^.,;:]*/g, " ");
+  // if everything was an exclusion ("no para carne ni pintura"), keep the plain words
+  const fallbackClean = productWords(withoutExclusions) || productWords(rawInput);
 
   if (!apiKey) {
     console.log("⚠️ No Groq key — using fallback keyword:", fallbackClean);
@@ -284,7 +288,8 @@ Rules:
 - Do NOT include thinking process, explanation, quotes, or punctuation.
 - Keep it concise (2-5 words): the product name plus its key technical attribute (for example capacity or number of needles).
 - Leave out quantities, packaging, who it is for (students, kids, restaurants) and phrases like "I need" or "to import".
-Examples: "lápices escolares de madera para estudiantes, paquete de 500 unidades" -> "wooden pencils"; "bordadora industrial de 15 agujas para gorras" -> "15 needle embroidery machine".`
+- Never include what the user rules out ("no para carne ni pintura", "not for paint"): leave those words out entirely.
+Examples: "lápices escolares de madera para estudiantes, paquete de 500 unidades" -> "wooden pencils"; "bordadora industrial de 15 agujas para gorras" -> "15 needle embroidery machine"; "molino para maíz y especias de 100 kg/h, no para carne ni pintura" -> "corn spice grinder 100kg/h".`
             },
             {
               role: "user",
