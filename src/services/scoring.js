@@ -92,8 +92,30 @@ function criteria(s, meanRating) {
   return { verification, track, performance, reputation, protection };
 }
 
-export function scoreSuppliers(suppliers, userRequirements = {}) {
-  const quantity = userRequirements.quantity || 0;
+// Numbers may arrive as text or be missing: normalize before scoring
+const num = (v) => {
+  const n = typeof v === "number" ? v : parseFloat(v);
+  return Number.isFinite(n) ? n : 0;
+};
+function normalizeSupplier(s) {
+  const rating = num(s?.rating);
+  return {
+    ...s,
+    name: String(s?.name ?? ""),
+    rating: rating > 0 && rating <= 5 ? rating : null,
+    reviews: Math.max(0, Math.round(num(s?.reviews))),
+    moq: Math.max(0, Math.round(num(s?.moq))),
+    price: Math.max(0, num(s?.price)),
+    yearsInBusiness: Math.max(0, Math.round(num(s?.yearsInBusiness))),
+    storeRating: num(s?.storeRating) > 0 ? num(s?.storeRating) : null,
+    certifications: Array.isArray(s?.certifications) ? s.certifications : [],
+    badges: Array.isArray(s?.badges) ? s.badges : [],
+  };
+}
+
+export function scoreSuppliers(rawSuppliers, userRequirements = {}) {
+  const suppliers = (Array.isArray(rawSuppliers) ? rawSuppliers : []).map(normalizeSupplier);
+  const quantity = num(userRequirements.quantity);
 
   const rated = suppliers.filter((s) => s.rating && (s.reviews || 0) > 0).map((s) => s.rating);
   const meanRating = rated.length ? rated.reduce((a, b) => a + b, 0) / rated.length : 4.0;
