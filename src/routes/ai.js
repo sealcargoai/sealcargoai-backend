@@ -326,4 +326,44 @@ Rules:
   return fallbackClean;
 }
 
+// Core product name (2-3 words, no numbers or specs) for a second search attempt
+export async function shortenKeyword(keyword) {
+  const heuristic = String(keyword || "")
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((w) => w && !/\d/.test(w) && !/^(needles?|heads?|kg|kgs|l|liters?|litres?|tons?|per|hour|batch|single|double|high|speed|automatic|industrial|commercial|for|with|and|of)$/.test(w))
+    .slice(-3)
+    .join(" ")
+    .trim();
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) return heuristic;
+  const model = process.env.GROQ_KEYWORD_MODEL || "qwen/qwen3.8-27b";
+  try {
+    const response = await axios.post(
+      "https://api.groq.com/openai/v1/chat/completions",
+      {
+        model,
+        messages: [
+          {
+            role: "system",
+            content: `Shorten this Alibaba search keyword to the core product name in 2 or 3 English words.
+Remove numbers, sizes, capacities and specifications. Return ONLY the keyword.`,
+          },
+          { role: "user", content: String(keyword || "") },
+        ],
+        temperature: 0,
+        max_tokens: 20,
+      },
+      { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, timeout: 6000 },
+    );
+    let text = response.data?.choices?.[0]?.message?.content || "";
+    text = text.replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/<think>[\s\S]*/gi, "");
+    const cleaned = text.replace(/["'`\r\n.,!?]/g, " ").replace(/\s+/g, " ").trim().split(/\s+/).slice(0, 3).join(" ");
+    return cleaned || heuristic;
+  } catch (error) {
+    console.error("⚠️ Groq shorten failed:", error.response?.data?.error?.message || error.message);
+    return heuristic;
+  }
+}
+
 export default router;

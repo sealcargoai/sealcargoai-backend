@@ -2,7 +2,7 @@ import express from "express";
 import NodeCache from "node-cache";
 import { searchSuppliers } from "../services/alibaba.js";
 import { scoreSuppliers, categorizeSuppliers } from "../services/scoring.js";
-import { refineKeyword } from "./ai.js";
+import { refineKeyword, shortenKeyword } from "./ai.js";
 import { clientIp, clean } from "../middleware/security.js";
 import { sendSearchLead } from "../services/email.js";
 
@@ -75,6 +75,7 @@ router.get("/test", (_req, res) => {
 });
 
 router.post("/search", async (req, res) => {
+  const startedAt = Date.now();
   try {
     const {
       productType,
@@ -140,7 +141,7 @@ router.post("/search", async (req, res) => {
     const cached = cache.get(cacheKey);
     if (cached) {
       console.log("⚡ Cache hit\n");
-      recordBackendSearch(userEmail, ip);
+      // a repeated search served from cache does not use a free search (same rule as the page)
       notifySearch({
         email: userEmail,
         userQuery: clean(userQuery, 1500),
@@ -162,15 +163,36 @@ router.post("/search", async (req, res) => {
     }
 
     // ── STEP 2: Fetch from Alibaba with refined keyword ─────────────────────
-    const rawSuppliers = await searchSuppliers({
+    let rawSuppliers = await searchSuppliers({
       keyword,
       pageSize: 20,
       quantity: qty,
     });
 
     // ── STEP 3: Score and categorize ────────────────────────────────────────
-    const scored = scoreSuppliers(rawSuppliers, { budget: bdg, quantity: qty });
-    const result = categorizeSuppliers(scored);
+    let result = categorizeSuppliers(scoreSuppliers(rawSuppliers, { budget: bdg, quantity: qty }));
+    let usedKeyword = keyword;
+
+    // ── STEP 3b: one retry with a shorter keyword ───────────────────────────
+    // Very specific keywords (from long descriptions) sometimes return nothing.
+    // If the first try was quick enough, retry with the core product name.
+    // The page waits ~95 s, so the retry only runs with time to spare.
+    if (!result?.totalAnalyzed && Date.now() - startedAt < 45000) {
+      const shorter = await shortenKeyword(keyword);
+      const budgetMs = 85000 - (Date.now() - startedAt);
+      if (shorter && shorter.toLowerCase() !== keyword.toLowerCase() && budgetMs > 20000) {
+        console.log(`🔁 No usable results for "${keyword}" — retrying with "${shorter}" (${Math.round(budgetMs / 1000)}s left)`);
+        const raw2 = await searchSuppliers({ keyword: shorter, pageSize: 20, quantity: qty, budgetMs });
+        const r2 = categorizeSuppliers(scoreSuppliers(raw2, { budget: bdg, quantity: qty }));
+        if (r2?.totalAnalyzed) {
+          rawSuppliers = raw2;
+          result = r2;
+          usedKeyword = shorter;
+        } else if ((raw2?.offerCount || 0) > (rawSuppliers?.offerCount || 0)) {
+          rawSuppliers = raw2;
+        }
+      }
+    }
 
     console.log(`✅ Done: ${result.qualifiedCount} suppliers returned\n`);
     
@@ -184,7 +206,7 @@ router.post("/search", async (req, res) => {
       return res.json({
         ...result,
         fromCache: false,
-        searchKeyword: keyword,
+        searchKeyword: usedKeyword,
         blocked: !noRelevantMatches,
         noRelevantMatches,
         message: noRelevantMatches
@@ -205,14 +227,14 @@ router.post("/search", async (req, res) => {
       quantity: qty,
       budget: bdg,
       destination: clean(destination, 60),
-      searchKeyword: keyword,
+      searchKeyword: usedKeyword,
       qualifiedCount: result.qualifiedCount,
       topSupplier: result.topSuppliers?.[0]?.name,
     });
     res.json({
       ...result,
       fromCache: false,
-      searchKeyword: keyword,   // ← return so frontend knows what was searched
+      searchKeyword: usedKeyword,   // ← return so frontend knows what was searched
       remainingSearches: remainingSearches(userEmail, ip),
     });
 
