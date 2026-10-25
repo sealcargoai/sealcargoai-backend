@@ -27,7 +27,13 @@ app.use(cors({
 app.use(express.json({ limit: "5mb" }));
 
 // Rate limits per IP
-const searchLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 20 });
+// QA / test accounts (QA_EMAILS) are not rate limited either
+const qaEmails = new Set(String(process.env.QA_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean));
+const searchLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  skip: (req) => qaEmails.has(String(req.body?.userEmail || "").trim().toLowerCase()),
+});
 const aiLimiter     = rateLimit({ windowMs: 10 * 60 * 1000, max: 40 });
 const emailLimiter  = rateLimit({ windowMs: 60 * 60 * 1000, max: 10 });
 
