@@ -72,7 +72,7 @@ function criteria(s, meanRating) {
   if (s.rating && reviews > 0) {
     const adj = (reviews / (reviews + BAYES_M)) * s.rating + (BAYES_M / (reviews + BAYES_M)) * meanRating;
     repParts.push(clamp(((adj - 3) / 2) * 100));
-    repTxt.push(`${s.rating.toFixed(1)} con ${reviews} reseñas (ajustado ${adj.toFixed(2)})`);
+    repTxt.push(`${s.rating.toFixed(1)} con ${reviews} ${reviews === 1 ? "reseña" : "reseñas"} (ajustado ${adj.toFixed(2)})`);
   }
   if (isNum(s.storeRating) && s.storeRating > 0) {
     repParts.push(clamp(((s.storeRating - 3) / 2) * 100));
