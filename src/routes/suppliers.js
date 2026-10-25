@@ -54,6 +54,15 @@ function remainingSearches(email, ip) {
   return Math.max(0, Math.min(byEmail, byIp));
 }
 
+// A description needs at least 10 characters and 2 real words (one of 4+ letters)
+function descriptionIsDetailed(text) {
+  const v = String(text || "").trim();
+  if (v.length < 10) return false;
+  const words = v.toLowerCase().match(/[a-záéíóúüñ]{3,}/g) || [];
+  const real = words.filter((w) => /[aeiouáéíóúü]/.test(w) && !/^(.)\1+$/.test(w));
+  return real.length >= 2 && real.some((w) => w.length >= 4);
+}
+
 const router = express.Router();
 const cache = new NodeCache({ stdTTL: 3600 });
 
@@ -89,6 +98,22 @@ router.post("/search", async (req, res) => {
 
     if (!productType) {
       return res.status(400).json({ error: "productType is required" });
+    }
+
+    // Same rule as the frontend: the description must say what the product is.
+    // Nothing is searched or counted ("abc" used to return unrelated products).
+    if (!descriptionIsDetailed(userQuery)) {
+      console.log(`⚠️ Description too vague: "${String(userQuery || "").slice(0, 60)}"`);
+      return res.json({
+        needsMoreDetail: true,
+        noRelevantMatches: true,
+        topSuppliers: [],
+        filteredOut: [],
+        totalAnalyzed: 0,
+        qualifiedCount: 0,
+        remainingSearches: remainingSearches(userEmail, ip),
+        message: "Description too vague to search.",
+      });
     }
     const qty = parseInt(quantity) || 1000;
     const bdg = parseFloat(budget) || 50000;
