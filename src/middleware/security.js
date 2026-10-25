@@ -31,7 +31,7 @@ export function clientIp(req) {
 }
 
 // Simple in-memory rate limiter: max requests per IP per window
-export function rateLimit({ windowMs, max, message }) {
+export function rateLimit({ windowMs, max, message, skip }) {
   const hits = new Map(); // ip -> { count, resetAt }
 
   setInterval(() => {
@@ -40,6 +40,7 @@ export function rateLimit({ windowMs, max, message }) {
   }, windowMs).unref();
 
   return (req, res, next) => {
+    if (skip && skip(req)) return next();
     const ip = clientIp(req);
     const now = Date.now();
     let entry = hits.get(ip);
@@ -53,6 +54,9 @@ export function rateLimit({ windowMs, max, message }) {
       return res.status(429).json({
         error: "Too many requests",
         message: message || "Demasiadas solicitudes. Intente de nuevo más tarde.",
+        // not the free-search limit: too many requests in a short time
+        rateLimited: true,
+        retryAfterSeconds: Math.ceil((entry.resetAt - now) / 1000),
       });
     }
     next();
