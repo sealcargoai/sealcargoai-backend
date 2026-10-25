@@ -290,6 +290,18 @@ const normWord = (w) => {
  * ok = enough of the meaningful terms appear to call it the same product:
  * all of them when there are 1-2, at least 60% when there are more.
  */
+// Alibaba titles come HTML-escaped ("&amp;", "&#39;")
+function decodeEntities(t) {
+    return String(t)
+        .replace(/&nbsp;/g, " ")
+        .replace(/&quot;/g, '"')
+        .replace(/&#0*39;|&apos;/g, "'")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&#(\d+);/g, (_m, n) => String.fromCharCode(Number(n)))
+        .replace(/&amp;/g, "&");
+}
+
 function calculateRelevance(title, keyword) {
     const cleanTitle = title.replace(/<[^>]+>/g, "").toLowerCase();
     const titleWords = new Set(cleanTitle.split(/[^a-z0-9]+/).filter(Boolean).map(normWord));
@@ -366,7 +378,7 @@ function mapOffersToSuppliers(offerList, keyword) {
 
     return offers
         .map((product, index) => {
-            const rawTitle = product.title || "";
+            const rawTitle = decodeEntities(product.title || "");
             const cleanTitle = rawTitle.replace(/<[^>]+>/g, "").toLowerCase();
 
             const rel = calculateRelevance(rawTitle, keyword);
@@ -376,7 +388,7 @@ function mapOffersToSuppliers(offerList, keyword) {
             return {
                 id: index + 1,
                 itemId: product.productId,
-                name: product.companyName,
+                name: decodeEntities(product.companyName || ""),
                 productName: cleanTitle,
                 productImage: product.mainImage?.startsWith("//")
                     ? `https:${product.mainImage}`

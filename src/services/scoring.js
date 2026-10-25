@@ -45,9 +45,9 @@ function criteria(s, meanRating) {
 
   // 1. Verification (always known: we can tell if it has a badge or not)
   const verification = audited
-    ? { score: 100, detail: "Verified Supplier (auditoría de tercero)" }
+    ? { score: 100, detail: "Proveedor verificado (auditoría de tercero)" }
     : gold
-      ? { score: 33, detail: "Gold Supplier (membresía, sin auditoría en planta)" }
+      ? { score: 33, detail: "Miembro Gold (membresía, sin auditoría en planta)" }
       : { score: 0, detail: "Sin insignia de verificación" };
 
   // 2. Track record (years published by Alibaba)
@@ -84,9 +84,9 @@ function criteria(s, meanRating) {
 
   // 5. Payment protection — only when the field is known
   const protection = s.tradeAssurance === true
-    ? { score: 100, detail: "Trade Assurance" }
+    ? { score: 100, detail: "Protección de pedidos" }
     : s.tradeAssurance === false
-      ? { score: 0, detail: "Sin Trade Assurance" }
+      ? { score: 0, detail: "Sin protección de pedidos" }
       : { score: null, detail: "N/D" };
 
   return { verification, track, performance, reputation, protection };
@@ -153,16 +153,16 @@ function getRejectReason(s, { trustScore, quantity }) {
   const audited = s.verifiedSupplier === true;
   const years = s.yearsInBusiness || 0;
   if (!audited && !s.goldSupplier) {
-    return "Sin verificación (no es Verified ni Gold Supplier)";
+    return "Sin verificación (no es proveedor verificado ni miembro Gold)";
   }
   if (!audited && years < FILTERS.minGoldYears) {
-    return `Gold Supplier con menos de ${FILTERS.minGoldYears} años`;
+    return `Miembro Gold con menos de ${FILTERS.minGoldYears} años`;
   }
   if (s.rating && (s.reviews || 0) >= FILTERS.minReviewsForRating && s.rating < FILTERS.minRating) {
     return `Calificación ${s.rating.toFixed(1)} por debajo de ${FILTERS.minRating.toFixed(1)}`;
   }
   if (quantity > 0 && s.moq > quantity) {
-    return `Pedido mínimo de ${s.moq.toLocaleString("en-US")} unidades, mayor a su cantidad`;
+    return `Pedido mínimo de ${s.moq.toLocaleString("en-US")} unidades, mayor a tu cantidad`;
   }
   if (trustScore < FILTERS.minTrust) {
     return `Índice referencial ${trustScore}/100, debajo del mínimo de ${FILTERS.minTrust}`;
