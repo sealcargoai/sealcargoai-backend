@@ -165,7 +165,7 @@ function getRejectReason(s, { trustScore, quantity }) {
     return `Pedido mínimo de ${s.moq.toLocaleString("en-US")} unidades, mayor a su cantidad`;
   }
   if (trustScore < FILTERS.minTrust) {
-    return `Índice de Confianza ${trustScore}/100, debajo del mínimo de ${FILTERS.minTrust}`;
+    return `Índice referencial ${trustScore}/100, debajo del mínimo de ${FILTERS.minTrust}`;
   }
   return null;
 }
