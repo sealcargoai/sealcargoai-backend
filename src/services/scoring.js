@@ -197,7 +197,8 @@ export function categorizeSuppliers(scoredSuppliers) {
   console.log(`Filters: ${qualified.length} qualified / ${rejected.length} filtered out`);
 
   return {
-    topSuppliers:   qualified.slice(0, 9),
+    // up to 20: the page re-orders by the specs the client asked for and shows the top 9
+    topSuppliers:   qualified.slice(0, 20),
     filteredOut:    rejected.slice(0, 20).map((s) => ({
       name:   s.name,
       reason: s.rejectReason,
@@ -208,6 +209,8 @@ export function categorizeSuppliers(scoredSuppliers) {
     totalAnalyzed:  scoredSuppliers.length,
     qualifiedCount: qualified.length,
     filteredCount:  rejected.length,   // real count (filteredOut list is capped at 20)
+    // listings from a company already counted (dedupe), so the counts add up
+    duplicateCount: scoredSuppliers.length - qualified.length - rejected.length,
     filters:        FILTERS,
     trustWeights:   TRUST_WEIGHTS,
   };
