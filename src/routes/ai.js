@@ -249,10 +249,13 @@ export async function refineKeyword({ userQuery, productType, material }) {
     ? userQuery.trim()
     : [productType, material].filter(Boolean).join(" ").trim();
 
+  // Used only if the AI fails: product words only (no commas, quantities or filler)
+  const STOP = /^(de|del|la|las|el|los|un|una|unos|unas|para|por|con|sin|y|o|en|a|al|que|necesito|quiero|busco|importar|comprar|paquete|paquetes|caja|cajas|unidades?|piezas?|estudiantes?|ni[nñ]os?|escolares?|the|of|for|and|with|a|an|to|pack|units?|pieces?)$/i;
   const fallbackClean = rawInput
-    .replace(/["'`\n.]/g, "")
+    .replace(/["'`\n.,;:()!?¿¡]/g, " ")
     .split(/\s+/)
-    .slice(0, 6)
+    .filter((w) => w && !/\d/.test(w) && !STOP.test(w))
+    .slice(0, 4)
     .join(" ")
     .trim();
 
@@ -279,15 +282,18 @@ Translate any language query into a clean 2 to 5 word English Alibaba product se
 Rules:
 - Return ONLY the search keyword text.
 - Do NOT include thinking process, explanation, quotes, or punctuation.
-- Keep it concise (2-5 words).`
+- Keep it concise (2-5 words): the product name plus its key technical attribute (for example capacity or number of needles).
+- Leave out quantities, packaging, who it is for (students, kids, restaurants) and phrases like "I need" or "to import".
+Examples: "lápices escolares de madera para estudiantes, paquete de 500 unidades" -> "wooden pencils"; "bordadora industrial de 15 agujas para gorras" -> "15 needle embroidery machine".`
             },
             {
               role: "user",
-              content: rawInput
+              content: `${rawInput}\n/no_think`
             }
           ],
           temperature: 0.1,
-          max_tokens: 30
+          // reasoning models write <think>…</think> first; 30 tokens left nothing for the answer
+          max_tokens: 300
         },
         {
           headers: {
@@ -317,6 +323,7 @@ Rules:
         console.log(`🤖 Groq refined keyword (${model}): "${rawInput}" → "${cleaned}"`);
         return cleaned;
       }
+      console.warn(`⚠️ Groq (${model}) returned no keyword (finish: ${response.data?.choices?.[0]?.finish_reason})`);
     } catch (error) {
       console.error(`⚠️ Groq refine failed with ${model}:`, error.response?.data?.error?.message || error.message);
     }
@@ -349,10 +356,10 @@ export async function shortenKeyword(keyword) {
             content: `Shorten this Alibaba search keyword to the core product name in 2 or 3 English words.
 Remove numbers, sizes, capacities and specifications. Return ONLY the keyword.`,
           },
-          { role: "user", content: String(keyword || "") },
+          { role: "user", content: `${String(keyword || "")}\n/no_think` },
         ],
         temperature: 0,
-        max_tokens: 20,
+        max_tokens: 300,
       },
       { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, timeout: 6000 },
     );

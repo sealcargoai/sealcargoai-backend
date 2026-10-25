@@ -177,9 +177,9 @@ router.post("/search", async (req, res) => {
     // Very specific keywords (from long descriptions) sometimes return nothing.
     // If the first try was quick enough, retry with the core product name.
     // The page waits ~95 s, so the retry only runs with time to spare.
-    if (!result?.totalAnalyzed && Date.now() - startedAt < 45000) {
+    if (!result?.totalAnalyzed && Date.now() - startedAt < 55000) {
       const shorter = await shortenKeyword(keyword);
-      const budgetMs = 85000 - (Date.now() - startedAt);
+      const budgetMs = 88000 - (Date.now() - startedAt);
       if (shorter && shorter.toLowerCase() !== keyword.toLowerCase() && budgetMs > 20000) {
         console.log(`🔁 No usable results for "${keyword}" — retrying with "${shorter}" (${Math.round(budgetMs / 1000)}s left)`);
         const raw2 = await searchSuppliers({ keyword: shorter, pageSize: 20, quantity: qty, budgetMs });
