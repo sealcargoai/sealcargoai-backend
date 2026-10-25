@@ -37,18 +37,35 @@ function ipEntry(ip) {
   return entry;
 }
 
+// QA / test accounts (Railway variable QA_EMAILS, comma separated) are not limited
+const QA_EMAILS = new Set(
+  String(process.env.QA_EMAILS || "")
+    .split(",")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean),
+);
+const isQa = (email) => !!email && QA_EMAILS.has(email);
+
+/** Why a search can't run: "email" (3 used), "ip" (this connection's daily limit) or "" */
+function limitReason(email, ip) {
+  if (isQa(email)) return "";
+  if (email && (emailTracker.get(email) || 0) >= SEARCH_LIMIT) return "email";
+  if (ipEntry(ip).count >= IP_SEARCH_LIMIT) return "ip";
+  return "";
+}
+
 function checkSearchLimit(email, ip) {
-  if (email && (emailTracker.get(email) || 0) >= SEARCH_LIMIT) return false;
-  if (ipEntry(ip).count >= IP_SEARCH_LIMIT) return false;
-  return true;
+  return !limitReason(email, ip);
 }
 
 function recordBackendSearch(email, ip) {
+  if (isQa(email)) return;
   if (email) emailTracker.set(email, (emailTracker.get(email) || 0) + 1);
   ipEntry(ip).count += 1;
 }
 
 function remainingSearches(email, ip) {
+  if (isQa(email)) return SEARCH_LIMIT;
   const byEmail = email ? SEARCH_LIMIT - (emailTracker.get(email) || 0) : SEARCH_LIMIT;
   const byIp = IP_SEARCH_LIMIT - ipEntry(ip).count;
   return Math.max(0, Math.min(byEmail, byIp));
@@ -71,6 +88,20 @@ router.get("/test", (_req, res) => {
     message: "✅ Suppliers route working",
     rapidApi: !!process.env.RAPIDAPI_KEY,
     grok: !!process.env.GROK_API_KEY,
+  });
+});
+
+// The form asks before offering a search, so it never shows a number the
+// server would contradict. Read-only: nothing is counted here.
+router.get("/quota", (req, res) => {
+  const email = normalizeEmail(String(req.query.email || "")).slice(0, 200);
+  const ip = clientIp(req);
+  res.set("Cache-Control", "no-store");
+  res.json({
+    limit: SEARCH_LIMIT,
+    remaining: remainingSearches(email, ip),
+    reason: limitReason(email, ip),
+    qa: isQa(email),
   });
 });
 
@@ -101,6 +132,9 @@ router.post("/search", async (req, res) => {
         error: "Search limit reached",
         message: "Has alcanzado el límite de búsquedas gratuitas.",
         limitReached: true,
+        reason: limitReason(userEmail, ip),
+        remainingSearches: 0,
+        limit: SEARCH_LIMIT,
       });
     }
 
