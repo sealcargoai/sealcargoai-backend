@@ -253,6 +253,21 @@ function normalizePrice(priceText) {
 /* ─────────────────────────────────────────────
    Extract MOQ
 ───────────────────────────────────────────── */
+// Sale unit from the minimum-order text ("Min. order: 100 sets" → "set").
+// Alibaba prices are per this unit, which is not always one piece.
+const SALE_UNITS = [
+    ["set", /\bsets?\b/i], ["box", /\bbox(es)?\b/i], ["pack", /\bpacks?\b|\bpk\b/i],
+    ["carton", /\bcartons?\b|\bctns?\b/i], ["dozen", /\bdozens?\b/i], ["pair", /\bpairs?\b/i],
+    ["bag", /\bbags?\b/i], ["roll", /\brolls?\b/i], ["meter", /\bmeters?\b|\bm\b/i],
+    ["kilogram", /\bkilograms?\b|\bkgs?\b/i], ["ton", /\btons?\b|\btonnes?\b/i],
+    ["piece", /\bpieces?\b|\bpcs?\b|\bunits?\b/i],
+];
+function extractSaleUnit(text) {
+    const t = String(text || "");
+    for (const [unit, re] of SALE_UNITS) if (re.test(t)) return unit;
+    return "";
+}
+
 function extractMOQ(text) {
     if (!text) return 1;
     const match = text.replace(/,/g, "").match(/\d+/);
@@ -396,6 +411,8 @@ function mapOffersToSuppliers(offerList, keyword) {
                 rating: parseFloat(product.reviewScore) || null,
                 reviews: parseInt(product.reviewCount) || 0,
                 moq: extractMOQ(product.moq),
+                moqText: String(product.moq || "").slice(0, 60),
+                saleUnit: extractSaleUnit(product.moq),
                 price: normalizePrice(product.price),
                 priceRange: product.price,
                 verified: !!product.goldSupplierYears,
