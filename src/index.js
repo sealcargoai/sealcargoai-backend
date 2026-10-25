@@ -68,6 +68,15 @@ app.get("/health", (_req, res) => {
   });
 });
 
+// Bad or oversized JSON and unexpected errors answer in JSON, without stack traces
+app.use((err, _req, res, _next) => {
+  const status = err?.type === "entity.too.large" ? 413 : err instanceof SyntaxError || err?.type === "entity.parse.failed" ? 400 : 500;
+  if (status === 500) console.error("❌ Unhandled error:", err?.message);
+  res.status(status).json({
+    error: status === 413 ? "Request too large" : status === 400 ? "Invalid JSON body" : "Internal error",
+  });
+});
+
 app.listen(PORT, () => {
   console.log(`\n✅ SealCargo Backend running at http://localhost:${PORT}`);
   console.log(`   Root:         http://localhost:${PORT}/`);
