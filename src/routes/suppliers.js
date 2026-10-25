@@ -77,6 +77,13 @@ router.get("/test", (_req, res) => {
 router.post("/search", async (req, res) => {
   const startedAt = Date.now();
   try {
+    // Text fields always as text, with the form's limits (arrays or objects never reach the search)
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    for (const k of ["userQuery", "productType", "material", "destination"]) {
+      const v = body[k];
+      body[k] = typeof v === "string" ? v.slice(0, 1500) : v == null ? "" : String(Array.isArray(v) ? v.join(" ") : "").slice(0, 1500);
+    }
+    req.body = body;
     const {
       productType,
       material,
@@ -116,8 +123,11 @@ router.post("/search", async (req, res) => {
         message: "Description too vague to search.",
       });
     }
-    const qty = parseInt(quantity) || 1000;
-    const bdg = parseFloat(budget) || 50000;
+    // Same limits as the form: whole units 1–10,000,000; budget a finite positive amount
+    const qtyNum = parseInt(quantity, 10);
+    const qty = Number.isFinite(qtyNum) && qtyNum >= 1 ? Math.min(qtyNum, 10_000_000) : 1000;
+    const bdgNum = parseFloat(budget);
+    const bdg = Number.isFinite(bdgNum) && bdgNum > 0 ? Math.min(bdgNum, 100_000_000) : 50000;
 
     console.log(`\n🔍 Search request`);
     console.log(`   User Query:  "${userQuery || "(none)"}"`);
