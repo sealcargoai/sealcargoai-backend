@@ -28,9 +28,9 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // indefinitely (the frontend gives up a bit later and offers a way out).
 const SEARCH_BUDGET_MS = parseInt(process.env.SEARCH_BUDGET_MS) || 75000;
 
-async function fetchAlibabaHtml(keyword) {
+async function fetchAlibabaHtml(keyword, budgetMs = SEARCH_BUDGET_MS) {
   const url = buildAlibabaSearchUrl(keyword);
-  const deadline = Date.now() + SEARCH_BUDGET_MS;
+  const deadline = Date.now() + Math.min(budgetMs, SEARCH_BUDGET_MS);
   const remaining = () => deadline - Date.now();
 
   // ✅ 1) Try Oxylabs Web Unblocker proxy first (up to 3 retries)
@@ -434,8 +434,8 @@ function mapOffersToSuppliers(offerList, keyword) {
 /* ─────────────────────────────────────────────
    Main Scraper
 ───────────────────────────────────────────── */
-async function searchAlibabaScraper({ keyword, pageSize = 20 }) {
-    const html = await fetchAlibabaHtml(keyword);
+async function searchAlibabaScraper({ keyword, pageSize = 20, budgetMs }) {
+    const html = await fetchAlibabaHtml(keyword, budgetMs);
 
     if (!html || html.length < 10000) {
         console.log("❌ HTML invalid or empty");
@@ -461,6 +461,6 @@ async function searchAlibabaScraper({ keyword, pageSize = 20 }) {
 /* ─────────────────────────────────────────────
    Export
 ───────────────────────────────────────────── */
-export async function searchSuppliers({ keyword, pageSize = 20 }) {
-    return await searchAlibabaScraper({ keyword, pageSize });
+export async function searchSuppliers({ keyword, pageSize = 20, budgetMs }) {
+    return await searchAlibabaScraper({ keyword, pageSize, budgetMs });
 }
