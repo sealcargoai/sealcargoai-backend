@@ -25,9 +25,26 @@ export function corsOrigin(origin, callback) {
   return callback(null, false);
 }
 
-// Client IP (Railway sits behind a proxy; app.set("trust proxy", 1) is required)
+// Client IP. Railway's edge overwrites X-Real-IP with the real client address
+// (values sent by the client never reach the app), while the rightmost
+// X-Forwarded-For entry (what req.ip gives with trust proxy 1) can be an
+// internal hop shared by many users. So: X-Real-IP first, then req.ip.
+const IP_RE = /^[0-9a-f:.]{3,45}$/i;
 export function clientIp(req) {
+  const real = String(req.headers?.["x-real-ip"] || "").trim();
+  if (IP_RE.test(real)) return real;
   return req.ip || req.socket?.remoteAddress || "unknown";
+}
+
+// What the server sees for the caller's own connection (no one else's data).
+export function connectionInfo(req) {
+  return {
+    ip: clientIp(req),
+    reqIp: req.ip || "",
+    xRealIp: String(req.headers?.["x-real-ip"] || ""),
+    xForwardedFor: String(req.headers?.["x-forwarded-for"] || ""),
+    peer: req.socket?.remoteAddress || "",
+  };
 }
 
 // Simple in-memory rate limiter: max requests per IP per window
