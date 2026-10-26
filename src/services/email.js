@@ -133,7 +133,7 @@ export async function sendQuoteRequest(data) {
     from: FROM_EMAIL,
     to: adminEmails,
     replyTo: data.email,
-    subject: `${testTag(data.name, data.email)}${data.requestType || "Solicitud de cotización"} — ${String(data.name).replace(/[\r\n]/g, " ")}`,
+    subject: `${testTag(data.name, data.email)}${String(data.requestType || "Solicitud de cotización").replace(/[\r\n]/g, " ")} — ${String(data.name).replace(/[\r\n]/g, " ")}`,
     html: emailWrapper("Quote Request", content),
   });
 

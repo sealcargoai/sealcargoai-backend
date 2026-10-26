@@ -1,10 +1,8 @@
 import axios from "axios";
 import { HttpsProxyAgent } from "https-proxy-agent";
 
-// Ensure Node TLS unauthorized connections are allowed for Oxylabs proxies
-if (!process.env.NODE_TLS_REJECT_UNAUTHORIZED) {
-  process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-}
+// TLS stays verified for every service (Resend, Groq, Sheets…). Only the
+// Oxylabs proxy agent below accepts its own certificate (rejectUnauthorized).
 
 /* ─────────────────────────────────────────────
    Build Alibaba Search URL
@@ -14,6 +12,7 @@ function buildAlibabaSearchUrl(keyword) {
         .trim()
         .replace(/\s+/g, " ")
         .split(" ")
+        .map(encodeURIComponent) // "&" or "#" in a keyword must not break the URL
         .join("+");
 
     return `https://www.alibaba.com/trade/search?spm=a27aq.404error.the-new-header_fy23_pc_search_bar.keydown__Enter&tab=all&SearchText=${cleanKeyword}&has4Tab=true`;
@@ -389,7 +388,10 @@ function mapOffersToSuppliers(offerList, keyword) {
 
     return offers
         .map((product, index) => {
-            const rawTitle = decodeEntities(product.title || "");
+            if (!product || typeof product !== "object") return null;
+            // upstream fields can come as numbers, arrays or objects: text only from here
+            const str = (v) => (typeof v === "string" ? v : typeof v === "number" ? String(v) : "");
+            const rawTitle = decodeEntities(str(product.title));
             const cleanTitle = rawTitle.replace(/<[^>]+>/g, "").toLowerCase();
 
             const rel = calculateRelevance(rawTitle, keyword);
@@ -399,22 +401,23 @@ function mapOffersToSuppliers(offerList, keyword) {
             return {
                 id: index + 1,
                 itemId: product.productId,
-                name: decodeEntities(product.companyName || ""),
+                name: decodeEntities(str(product.companyName)),
                 productName: cleanTitle,
-                productImage: product.mainImage?.startsWith("//")
+                productImage: str(product.mainImage).startsWith("//")
                     ? `https:${product.mainImage}`
-                    : product.mainImage,
-                images: product.multiImage?.map(img =>
-                    img.startsWith("//") ? `https:${img}` : img
-                ) || [],
+                    : str(product.mainImage),
+                images: (Array.isArray(product.multiImage) ? product.multiImage : [])
+                    .map(str)
+                    .filter(Boolean)
+                    .map((img) => (img.startsWith("//") ? `https:${img}` : img)),
                 // Real values only — null when Alibaba doesn't publish them
                 rating: parseFloat(product.reviewScore) || null,
                 reviews: parseInt(product.reviewCount) || 0,
-                moq: extractMOQ(product.moq),
-                moqText: String(product.moq || "").slice(0, 60),
-                saleUnit: extractSaleUnit(product.moq),
-                price: normalizePrice(product.price),
-                priceRange: product.price,
+                moq: extractMOQ(str(product.moq)),
+                moqText: str(product.moq).slice(0, 60),
+                saleUnit: extractSaleUnit(str(product.moq)),
+                price: normalizePrice(str(product.price)),
+                priceRange: str(product.price),
                 verified: !!product.goldSupplierYears,
                 location: product.countryCode || "CN",
                 yearsInBusiness:
@@ -431,11 +434,11 @@ function mapOffersToSuppliers(offerList, keyword) {
                 goldSupplier: !!product.goldSupplierYears,
                 contactEmail: "",
                 contactPhone: "",
-                productUrl: product.productUrl
-                    ? `https:${product.productUrl}`
+                productUrl: str(product.productUrl)
+                    ? (str(product.productUrl).startsWith("http") ? str(product.productUrl) : `https:${str(product.productUrl)}`)
                     : "",
-                storeUrl: product.supplierHref
-                    ? `https:${product.supplierHref}`
+                storeUrl: str(product.supplierHref)
+                    ? (str(product.supplierHref).startsWith("http") ? str(product.supplierHref) : `https:${str(product.supplierHref)}`)
                     : "",
                 relevance
             };
