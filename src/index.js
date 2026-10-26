@@ -8,6 +8,7 @@ import aiRouter from "./routes/ai.js";
 import emailRoutes from "./routes/email.js";
 import ratesRouter from "./routes/rates.js";
 import { corsOrigin, rateLimit } from "./middleware/security.js";
+import { isQa } from "./services/quotaStore.js";
 
 
 const app = express();
@@ -28,11 +29,10 @@ app.use(express.json({ limit: "5mb" }));
 
 // Rate limits per IP
 // QA / test accounts (QA_EMAILS) are not rate limited either
-const qaEmails = new Set(String(process.env.QA_EMAILS || "").split(",").map((e) => e.trim().toLowerCase()).filter(Boolean));
 const searchLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 20,
-  skip: (req) => qaEmails.has(String(req.body?.userEmail || "").trim().toLowerCase()),
+  skip: (req) => typeof req.body?.userEmail === "string" && isQa(req.body.userEmail),
 });
 const aiLimiter     = rateLimit({ windowMs: 10 * 60 * 1000, max: 40 });
 const emailLimiter  = rateLimit({ windowMs: 60 * 60 * 1000, max: 10 });
@@ -53,9 +53,6 @@ app.get("/", (_req, res) => {
     endpoints: {
       health:    "GET  /health",
       suppliers: "POST /api/suppliers/search",
-      chat:      "POST /api/ai/chat",
-      costs:     "POST /api/ai/costs",
-      contact:   "POST /api/ai/contact",
     },
   });
 });
