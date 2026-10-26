@@ -3,7 +3,7 @@ import NodeCache from "node-cache";
 import { searchSuppliers } from "../services/alibaba.js";
 import { scoreSuppliers, categorizeSuppliers } from "../services/scoring.js";
 import { refineKeyword, shortenKeyword } from "./ai.js";
-import { clientIp, clean } from "../middleware/security.js";
+import { clientIp, clean, connectionInfo } from "../middleware/security.js";
 import { sendSearchLead } from "../services/email.js";
 
 // Send the search to SEAL sales without delaying the user's response
@@ -51,6 +51,9 @@ router.get("/test", (_req, res) => {
 
 // The form asks before offering a search, so it never shows a number the
 // server would contradict. Read-only: nothing is counted here.
+// Diagnostic: how the server sees the caller's own connection
+router.get("/whoami", (req, res) => res.json(connectionInfo(req)));
+
 router.get("/quota", (req, res) => {
   const email = normalizeEmail(typeof req.query.email === "string" ? req.query.email : "");
   const ip = clientIp(req);
