@@ -80,5 +80,7 @@ export function isEmail(value) {
 
 // Trim and cap the length of free-text fields
 export function clean(value, max = 500) {
-  return String(value ?? "").trim().slice(0, max);
+  // only text and numbers are accepted; objects/arrays never reach emails or logs
+  const v = typeof value === "string" ? value : typeof value === "number" && Number.isFinite(value) ? String(value) : "";
+  return v.trim().slice(0, max);
 }
