@@ -5,6 +5,23 @@ import {
   sendReportToUser,
 } from "../services/email.js";
 import { isEmail, clean } from "../middleware/security.js";
+import { hasSearched, emailKey } from "../services/quotaStore.js";
+
+// Reports go out from SEAL's address: only someone who ran a search may send
+// one, and each recipient gets a few per day (no open relay)
+const DAY = 24 * 60 * 60 * 1000;
+const sentTo = new Map(); // recipient key -> [timestamps]
+const sentBy = new Map(); // requester key -> [timestamps]
+function underCap(map, key, max) {
+  const now = Date.now();
+  const list = (map.get(key) || []).filter((t) => now - t < DAY);
+  map.set(key, list);
+  return list.length < max;
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const m of [sentTo, sentBy]) for (const [k, list] of m) if (!list.some((t) => now - t < DAY)) m.delete(k);
+}, 60 * 60 * 1000).unref();
 
 const router = express.Router();
 
@@ -69,6 +86,15 @@ router.post("/report", async (req, res) => {
     if (!isEmail(recipientEmail)) {
       return res.status(400).json({ error: "a valid recipientEmail is required" });
     }
+    const requester = clean(b.requesterEmail, 254);
+    if (!isEmail(requester) || !hasSearched(requester)) {
+      return res.status(403).json({ error: "report_not_allowed", message: "Only the person who ran the search can send this report." });
+    }
+    const toKey = emailKey(recipientEmail);
+    const byKey = emailKey(requester);
+    if (!underCap(sentTo, toKey, 3) || !underCap(sentBy, byKey, 10)) {
+      return res.status(429).json({ error: "report_limit", message: "Too many reports sent today." });
+    }
 
     // Frontend sends the PDF as base64 (pdfBase64)
     let pdfBuffer = null;
@@ -80,6 +106,8 @@ router.post("/report", async (req, res) => {
       }
     }
 
+    sentTo.get(toKey).push(Date.now());
+    sentBy.get(byKey).push(Date.now());
     const result = await sendReportToUser({
       recipientEmail,
       recipientName: clean(b.recipientName, 120),

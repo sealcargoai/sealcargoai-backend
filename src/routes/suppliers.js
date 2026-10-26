@@ -13,63 +13,15 @@ function notifySearch(details) {
   );
 }
 
-// ── Free search limit, enforced on the server ───────────────────────────────
-// Per email (3 free searches) and per IP (stops people switching emails or
-// using incognito). In memory: counters reset when the service restarts.
-const SEARCH_LIMIT = parseInt(process.env.SEARCH_LIMIT) || 3;
-const IP_SEARCH_LIMIT = parseInt(process.env.IP_SEARCH_LIMIT) || 6;
-const IP_WINDOW_MS = 24 * 60 * 60 * 1000;
-
-const emailTracker = new Map(); // email -> count
-const ipTracker = new Map();    // ip -> { count, resetAt }
-
-function normalizeEmail(email) {
-  return typeof email === "string" ? email.trim().toLowerCase() : "";
-}
-
-function ipEntry(ip) {
-  const now = Date.now();
-  let entry = ipTracker.get(ip);
-  if (!entry || entry.resetAt <= now) {
-    entry = { count: 0, resetAt: now + IP_WINDOW_MS };
-    ipTracker.set(ip, entry);
-  }
-  return entry;
-}
-
-// QA / test accounts (Railway variable QA_EMAILS, comma separated) are not limited
-const QA_EMAILS = new Set(
-  String(process.env.QA_EMAILS || "")
-    .split(",")
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean),
-);
-const isQa = (email) => !!email && QA_EMAILS.has(email);
-
-/** Why a search can't run: "email" (3 used), "ip" (this connection's daily limit) or "" */
-function limitReason(email, ip) {
-  if (isQa(email)) return "";
-  if (email && (emailTracker.get(email) || 0) >= SEARCH_LIMIT) return "email";
-  if (ipEntry(ip).count >= IP_SEARCH_LIMIT) return "ip";
-  return "";
-}
-
-function checkSearchLimit(email, ip) {
-  return !limitReason(email, ip);
-}
-
-function recordBackendSearch(email, ip) {
-  if (isQa(email)) return;
-  if (email) emailTracker.set(email, (emailTracker.get(email) || 0) + 1);
-  ipEntry(ip).count += 1;
-}
-
-function remainingSearches(email, ip) {
-  if (isQa(email)) return SEARCH_LIMIT;
-  const byEmail = email ? SEARCH_LIMIT - (emailTracker.get(email) || 0) : SEARCH_LIMIT;
-  const byIp = IP_SEARCH_LIMIT - ipEntry(ip).count;
-  return Math.max(0, Math.min(byEmail, byIp));
-}
+// ── Free search limit, enforced on the server (services/quotaStore.js) ──────
+import {
+  SEARCH_LIMIT,
+  normalizeEmail,
+  isQa,
+  limitReason,
+  remainingSearches,
+  reserveSearch,
+} from "../services/quotaStore.js";
 
 // A description needs at least 10 characters and 2 real words (one of 4+ letters)
 function descriptionIsDetailed(text) {
@@ -82,6 +34,12 @@ function descriptionIsDetailed(text) {
 
 const router = express.Router();
 const cache = new NodeCache({ stdTTL: 3600 });
+// who already saw which cached result (a repeat of one's own search is free)
+const seen = new Map();
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, at] of seen) if (now - at > 3600 * 1000) seen.delete(k);
+}, 10 * 60 * 1000).unref();
 
 router.get("/test", (_req, res) => {
   res.json({
@@ -94,19 +52,19 @@ router.get("/test", (_req, res) => {
 // The form asks before offering a search, so it never shows a number the
 // server would contradict. Read-only: nothing is counted here.
 router.get("/quota", (req, res) => {
-  const email = normalizeEmail(String(req.query.email || "")).slice(0, 200);
+  const email = normalizeEmail(typeof req.query.email === "string" ? req.query.email : "");
   const ip = clientIp(req);
   res.set("Cache-Control", "no-store");
   res.json({
     limit: SEARCH_LIMIT,
     remaining: remainingSearches(email, ip),
     reason: limitReason(email, ip),
-    qa: isQa(email),
   });
 });
 
 router.post("/search", async (req, res) => {
   const startedAt = Date.now();
+  let ticket = null;
   try {
     // Text fields always as text, with the form's limits (arrays or objects never reach the search)
     const body = req.body && typeof req.body === "object" ? req.body : {};
@@ -126,8 +84,10 @@ router.post("/search", async (req, res) => {
     const userEmail = normalizeEmail(req.body.userEmail);
     const ip = clientIp(req);
 
-    // ── SEARCH LIMIT CHECK ──────────────────────────────
-    if (!checkSearchLimit(userEmail, ip)) {
+    // ── SEARCH LIMIT CHECK: the slot is reserved now (parallel requests can't
+    // pass the limit) and given back below if the search shows nothing ──
+    ticket = reserveSearch(userEmail, ip);
+    if (!ticket) {
       return res.status(429).json({
         error: "Search limit reached",
         message: "Has alcanzado el límite de búsquedas gratuitas.",
@@ -139,6 +99,7 @@ router.post("/search", async (req, res) => {
     }
 
     if (!productType) {
+      ticket.release();
       return res.status(400).json({ error: "productType is required" });
     }
 
@@ -146,6 +107,7 @@ router.post("/search", async (req, res) => {
     // Nothing is searched or counted ("abc" used to return unrelated products).
     if (!descriptionIsDetailed(userQuery)) {
       console.log(`⚠️ Description too vague: "${String(userQuery || "").slice(0, 60)}"`);
+      ticket.release();
       return res.json({
         needsMoreDetail: true,
         noRelevantMatches: true,
@@ -158,9 +120,9 @@ router.post("/search", async (req, res) => {
       });
     }
     // Same limits as the form: whole units 1–10,000,000; budget a finite positive amount
-    const qtyNum = parseInt(quantity, 10);
-    const qty = Number.isFinite(qtyNum) && qtyNum >= 1 ? Math.min(qtyNum, 10_000_000) : 1000;
-    const bdgNum = parseFloat(budget);
+    const qtyNum = typeof quantity === "number" || typeof quantity === "string" ? Number(quantity) : NaN;
+    const qty = Number.isFinite(qtyNum) && qtyNum >= 1 ? Math.min(Math.floor(qtyNum), 10_000_000) : 1000;
+    const bdgNum = typeof budget === "number" || typeof budget === "string" ? Number(budget) : NaN;
     const bdg = Number.isFinite(bdgNum) && bdgNum > 0 ? Math.min(bdgNum, 100_000_000) : 50000;
 
     console.log(`\n🔍 Search request`);
@@ -185,7 +147,13 @@ router.post("/search", async (req, res) => {
     const cached = cache.get(cacheKey);
     if (cached) {
       console.log("⚡ Cache hit\n");
-      // a repeated search served from cache does not use a free search (same rule as the page)
+      // repeating one's own search is free; someone else's (or a rephrased) one counts
+      const seenKey = `${userEmail || ip}|${cacheKey}`;
+      if (seen.has(seenKey)) ticket.release();
+      else {
+        seen.set(seenKey, Date.now());
+        ticket.commit();
+      }
       notifySearch({
         email: userEmail,
         userQuery: clean(userQuery, 1500),
@@ -244,6 +212,7 @@ router.post("/search", async (req, res) => {
     // and neither are results where every supplier failed the filters.
     if (!result?.totalAnalyzed) {
       const noRelevantMatches = (rawSuppliers?.offerCount || 0) > 0;
+      ticket.release();
       console.log(noRelevantMatches
         ? `⚠️ ${rawSuppliers.offerCount} offers, none related to "${keyword}" — asking client for more detail`
         : "⚠️ Not caching empty supplier result");
@@ -261,7 +230,11 @@ router.post("/search", async (req, res) => {
     }
 
     // Only searches that showed options use a free search
-    if (result.topSuppliers?.length > 0) recordBackendSearch(userEmail, ip);
+    if (result.topSuppliers?.length > 0) {
+      ticket.commit();
+      seen.set(`${userEmail || ip}|${cacheKey}`, Date.now());
+    }
+    else ticket.release();
     cache.set(cacheKey, result);
     notifySearch({
       email: userEmail,
@@ -283,6 +256,7 @@ router.post("/search", async (req, res) => {
     });
 
   } catch (error) {
+    ticket?.release();
     console.error("❌ /search error:", error.message);
     res.status(500).json({
       error: "Failed to search suppliers",
