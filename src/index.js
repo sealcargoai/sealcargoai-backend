@@ -8,6 +8,7 @@ import aiRouter from "./routes/ai.js";
 import emailRoutes from "./routes/email.js";
 import ratesRouter from "./routes/rates.js";
 import leadsRouter, { learnBase } from "./routes/leads.js";
+import { recipientConfig } from "./services/email.js";
 import { corsOrigin, rateLimit } from "./middleware/security.js";
 import { isQa, flushQuota } from "./services/quotaStore.js";
 import { flushLeads } from "./services/leadStore.js";
@@ -100,5 +101,8 @@ app.listen(PORT, () => {
   console.log(`\n✅ SealCargo Backend running at http://localhost:${PORT}`);
   console.log(`   Root:         http://localhost:${PORT}/`);
   console.log(`   Health check: http://localhost:${PORT}/health`);
-  console.log(`   Suppliers:    http://localhost:${PORT}/api/suppliers/test\n`);
+  console.log(`   Suppliers:    http://localhost:${PORT}/api/suppliers/test`);
+  // counts only: no addresses in the logs
+  const rc = recipientConfig();
+  console.log(`   Recipients:   real → ${rc.commercial} commercial${rc.devGetsReal ? ` + ${rc.devCopies} dev (authorized)` : ""}; tests → ${rc.qaInbox ? "QA inbox" : "commercial"} + ${rc.devCopies} dev\n`);
 });
