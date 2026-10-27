@@ -101,11 +101,13 @@ export function reserveSearch(email, ip) {
   if (limitReason(email, ip)) return null;
   const qa = isQa(email);
   const key = emailKey(email);
-  if (key) {
+  // only a search that showed results lets this email send its report (see routes/email.js)
+  const markSearched = () => {
+    if (!key) return;
     searched.set(key, Date.now());
     scheduleSave();
-  }
-  if (qa) return { commit() {}, release() {} };
+  };
+  if (qa) return { commit: markSearched, release() {} };
   const e = key ? emailEntry(key) : null;
   const i = ipEntry(ip);
   if (e) e.pending += 1;
@@ -117,10 +119,16 @@ export function reserveSearch(email, ip) {
     if (e) {
       e.pending = Math.max(0, e.pending - 1);
       if (counted) e.count += 1;
+      // searches that counted nothing leave no entry behind (memory and quota.json stay small)
+      if (!e.count && !e.pending) emails.delete(key);
     }
     i.pending = Math.max(0, i.pending - 1);
     if (counted) i.count += 1;
-    if (counted) scheduleSave();
+    if (!i.count && !i.pending) ips.delete(ip);
+    if (counted) {
+      markSearched();
+      scheduleSave();
+    }
   };
   return { commit: () => finish(true), release: () => finish(false) };
 }
@@ -173,3 +181,22 @@ if (FILE) {
   }
 }
 export const quotaPersistent = !!FILE;
+
+/** Writes pending counts now (on shutdown, so a deploy doesn't lose the last seconds). */
+export function flushQuota() {
+  if (!FILE || !saveTimer) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  try {
+    const data = {
+      emails: [...emails].map(([k, e]) => [k, e.count]).filter(([, c]) => c > 0),
+      ips: [...ips].map(([k, e]) => [k, e.count, e.resetAt]).filter(([, c, r]) => c > 0 && r > Date.now()),
+      searched: [...searched],
+    };
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(`${FILE}.tmp`, JSON.stringify(data));
+    fs.renameSync(`${FILE}.tmp`, FILE);
+  } catch (err) {
+    console.error("⚠️ quota flush failed:", err.message);
+  }
+}

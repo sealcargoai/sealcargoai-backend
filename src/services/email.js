@@ -151,6 +151,7 @@ export async function sendReportToUser({
   supplierName,
   totalCost,
   totalCostText,
+  requesterEmail,
 }) {
   const resend = getResendClient();
   const attachments = pdfBuffer
@@ -162,6 +163,8 @@ export async function sendReportToUser({
     <p>Hola ${e(recipientName || "")}</p>
     <p>Proveedor: ${e(supplierName)}</p>
     <p>Costo total estimado: ${e(totalCostText || "US$" + Number(totalCost || 0).toLocaleString("en-US"))}</p>
+    ${requesterEmail && requesterEmail.toLowerCase() !== String(recipientEmail).toLowerCase() ? `<p>Enviado a solicitud de: ${e(requesterEmail)}</p>` : ""}
+    <p style="color:#64748b;font-size:12px">Es una estimación preliminar con información publicada por la plataforma; no es una cotización ni una verificación del proveedor.</p>
   `;
 
   const { data, error } = await resend.emails.send({
