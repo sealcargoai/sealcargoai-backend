@@ -1,9 +1,12 @@
 import express from "express";
 import {
   sendLeadNotification,
-  sendQuoteRequest,
   sendReportToUser,
+  sendCaseToSeal,
+  testTag,
 } from "../services/email.js";
+import { registerLead, markNotified, leadsPersistent } from "../services/leadStore.js";
+import { linksFor, baseUrl } from "./leads.js";
 import { isEmail, clean } from "../middleware/security.js";
 import { hasSearched, emailKey, verifyReportToken } from "../services/quotaStore.js";
 
@@ -45,34 +48,67 @@ router.post("/lead", async (req, res) => {
   }
 });
 
+// A request to SEAL (quote, contact, supplier check…): registered as a case with
+// a number, without duplicates, with the whole context the client saw, and
+// emailed to SEAL with the links a person uses to record the follow-up.
+const list = (v, max = 12, len = 300) =>
+  (Array.isArray(v) ? v : []).map((x) => clean(x, len)).filter(Boolean).slice(0, max);
 router.post("/quote", async (req, res) => {
   try {
     const b = req.body || {};
-    const data = {
+    const contact = {
       name: clean(b.name, 120),
       email: clean(b.email, 254),
       phone: clean(b.phone, 40),
       company: clean(b.company, 160),
-      message: clean(b.message, 2000),
-      supplierName: clean(b.supplierName, 200),
-      totalCost: Number(b.totalCost) || 0,
-      totalCostText: clean(b.totalCostText, 80), // e.g. "Q278,041 (US$35,195)"
-      productType: clean(b.productType, 120),
-      quantity: clean(b.quantity, 40),
-      destination: clean(b.destination, 60),
-      budget: clean(b.budget, 40),
-      requestType: clean(b.requestType, 80),           // e.g. "Búsqueda asistida", "Contactar proveedor"
-      productDescription: clean(b.productDescription, 1500),
-      supplierUrl: clean(b.supplierUrl, 500),
     };
-    // Drop empty fields so the email stays clean
-    for (const k of Object.keys(data)) if (data[k] === "" || data[k] === 0) delete data[k];
-    if (!data.name || !isEmail(data.email)) {
+    if (!contact.name || !isEmail(contact.email)) {
       return res.status(400).json({ error: "name and a valid email are required" });
     }
-
-    await sendQuoteRequest(data);
-    res.json({ success: true });
+    const caseData = {
+      // the client's own words first; the category ("ppe") only as a last resort
+      product: clean(b.product, 160) || clean(b.productDescription, 160) || clean(b.productType, 160),
+      description: clean(b.productDescription, 1500),
+      quantity: clean(b.quantity, 60),
+      supplierName: clean(b.supplierName, 200),
+      supplierUrl: clean(b.supplierUrl, 500),
+      price: clean(b.price, 80),
+      totalCostText: clean(b.totalCostText, 80),
+      budget: clean(b.budget, 40),
+      destination: clean(b.destination, 60),
+      message: clean(b.message, 2000),
+      caseRef: clean(b.caseRef, 40),
+      assumptions: list(b.assumptions),
+      warnings: list(b.warnings),
+      chat: list(b.chat, 8, 500),
+    };
+    if (!caseData.totalCostText && Number(b.totalCost) > 0) caseData.totalCostText = `US$${Math.round(Number(b.totalCost)).toLocaleString("en-US")}`;
+    for (const k of Object.keys(caseData)) if (caseData[k] === "") delete caseData[k];
+    const { lead, duplicate } = registerLead({
+      contact,
+      case: caseData,
+      source: clean(b.source, 40),
+      intent: clean(b.intent, 60),
+      requestType: clean(b.requestType, 80) || "Solicitud de cotización",
+      lang: b.lang,
+      test: !!testTag(contact.name, contact.email),
+    });
+    // a repeat of an open case is not emailed again (unless the first email failed)
+    let notified = lead.notified;
+    if (!duplicate || lead.notified === false) {
+      try {
+        await sendCaseToSeal(lead, linksFor(lead, baseUrl(req)));
+        markNotified(lead.id, true);
+        notified = true;
+      } catch (err) {
+        console.error("❌ case email failed:", lead.id, err.message);
+        markNotified(lead.id, false, err.message);
+        notified = false;
+        // without a saved registry an unsent email would lose the case
+        if (!leadsPersistent) return res.status(500).json({ error: "Could not send email" });
+      }
+    }
+    res.json({ success: true, id: lead.id, duplicate, notified: notified !== false });
   } catch (err) {
     console.error("❌ /email/quote:", err.message);
     res.status(500).json({ error: "Could not send email" });
