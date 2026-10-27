@@ -41,6 +41,7 @@ const LABEL = {
   cliente: "Cliente",
   descartado: "Descartado",
   derivar: "Derivar a otra empresa del grupo",
+  excluir: "Marcar como prueba (excluir de las métricas)",
 };
 const page = (title, body) => `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${e(title)}</title>
 <style>body{font-family:system-ui,Arial,sans-serif;max-width:640px;margin:0 auto;padding:20px;color:#0f172a;background:#f8fafc}h1{color:#0B3C5D;font-size:22px}.card{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px;margin:12px 0}label{display:block;margin:10px 0 4px;font-size:14px}input,select,textarea{width:100%;box-sizing:border-box;padding:8px;border:1px solid #cbd5e1;border-radius:6px;font:inherit}button{margin-top:14px;padding:10px 16px;background:#0B3C5D;color:#fff;border:0;border-radius:6px;font:inherit;cursor:pointer}table{border-collapse:collapse;width:100%}td{padding:6px 8px;border-bottom:1px solid #e2e8f0}td.n{text-align:right;font-weight:700}.muted{color:#64748b;font-size:13px}.ok{color:#15803d}.err{color:#b91c1c}</style></head><body>${body}</body></html>`;
@@ -74,7 +75,7 @@ function caseSummary(l) {
     .slice(-8)
     .map((h) => `<li>${e(new Date(h.at).toLocaleString("es-GT", { timeZone: "America/Guatemala" }))} — ${e(h.action)}${h.status ? `: ${e(h.status)}` : ""}${h.transferTo ? ` → ${e(h.transferTo)} (validó ${e(h.validatedBy)})` : ""}${h.by ? ` · ${e(h.by)}` : ""}${h.note ? ` · ${e(h.note)}` : ""}</li>`)
     .join("");
-  return `<div class="card"><b>${e(l.id)}</b> · ${e(l.contact.name)} (${e(l.contact.email)})<br>${e(l.case.product || l.case.description || "")}${l.case.quantity ? ` · ${e(l.case.quantity)}` : ""}<br><span class="muted">Estado actual: <b>${e(l.status)}</b>${l.repeats ? ` · el cliente volvió a enviarlo ${l.repeats} vez/veces (agrupado, sin duplicar)` : ""}</span><ul class="muted">${hist}</ul></div>`;
+  return `<div class="card"><b>${e(l.id)}</b> · ${e(l.contact.name)} (${e(l.contact.email)})<br>${e(l.case.product || l.case.description || "")}${l.case.quantity ? ` · ${e(l.case.quantity)}` : ""}<br><span class="muted">Estado actual: <b>${e(l.status)}</b>${l.excluded ? " · excluido de las métricas" : ""}${l.repeats ? ` · el cliente volvió a enviarlo ${l.repeats} vez/veces (agrupado, sin duplicar)` : ""}</span><ul class="muted">${hist}</ul></div>`;
 }
 router.get("/leads/act/:id", (req, res) => {
   const l = getLead(String(req.params.id));
@@ -90,7 +91,7 @@ router.get("/leads/act/:id", (req, res) => {
         <input type="hidden" name="s" value="${e(s)}"><input type="hidden" name="t" value="${e(t)}">
         ${transfer ? `<label>Empresa del grupo</label><select name="transferTo" required><option value="">Elegir…</option>${GROUP_COMPANIES.map((c) => `<option>${e(c)}</option>`).join("")}</select>
         <label>Persona que valida la derivación (obligatorio)</label><input name="validatedBy" required maxlength="120">` : `<label>Tu nombre (obligatorio: queda registrado quién hizo el cambio y cuándo)</label><input name="by" required maxlength="120">`}
-        <label>Nota (opcional)</label><textarea name="note" rows="3" maxlength="500"></textarea>
+        ${s === "excluir" ? `<label>Motivo (obligatorio)</label><textarea name="note" rows="3" maxlength="500" required></textarea><p class="muted">El caso se conserva en el registro, pero deja de contar como solicitud, lead o cliente.</p>` : `<label>Nota (opcional)</label><textarea name="note" rows="3" maxlength="500"></textarea>`}
         <button type="submit">Confirmar: ${e(LABEL[s])}</button>
         ${transfer ? `<p class="muted">SEAL atiende primero el caso; la derivación no es automática y queda registrada con quién la validó.</p>` : ""}
       </form>`,
@@ -105,9 +106,11 @@ router.post("/leads/act/:id", (req, res) => {
   const r =
     s === "derivar"
       ? updateLead(l.id, { transferTo: clean(b.transferTo, 40), validatedBy: clean(b.validatedBy, 120), note: clean(b.note, 500) })
-      : updateLead(l.id, { status: s, by: clean(b.by, 120), note: clean(b.note, 500) });
+      : s === "excluir"
+        ? updateLead(l.id, { exclude: true, by: clean(b.by, 120), note: clean(b.note, 500) })
+        : updateLead(l.id, { status: s, by: clean(b.by, 120), note: clean(b.note, 500) });
   if (r.error) {
-    const msg = r.error === "validation_required" || r.error === "who_required" ? (s === "derivar" ? "Falta el nombre de la persona que valida la derivación." : "Falta tu nombre: queda registrado quién hizo el cambio.") : r.error === "unknown_company" ? "Elige una empresa del grupo." : "No se pudo registrar.";
+    const msg = r.error === "validation_required" || r.error === "who_required" ? (s === "derivar" ? "Falta el nombre de la persona que valida la derivación." : "Falta tu nombre: queda registrado quién hizo el cambio.") : r.error === "unknown_company" ? "Elige una empresa del grupo." : r.error === "reason_required" ? "Falta el motivo para excluirlo de las métricas." : "No se pudo registrar.";
     return res.status(400).send(page("Error", `<h1 class="err">${e(msg)}</h1><p><a href="?s=${encodeURIComponent(s)}&t=${encodeURIComponent(clean(b.t, 64))}">Volver</a></p>`));
   }
   res.send(page("Registrado", `<h1 class="ok">Registrado: ${e(LABEL[s])}</h1>${caseSummary(r.lead)}`));
