@@ -10,7 +10,7 @@ import { escapeHtml as e, clean } from "../middleware/security.js";
 import { sign, verifySigned } from "../services/quotaStore.js";
 import { getLead, updateLead, leadFunnel, dueForReminder, markReminded, GROUP_COMPANIES } from "../services/leadStore.js";
 import { recordEvent, eventTotals } from "../services/funnelStore.js";
-import { sendFollowUpReminder, emailDelivery } from "../services/email.js";
+import { sendFollowUpReminder, emailDelivery, recipientConfig } from "../services/email.js";
 
 // Links in SEAL's emails never take their host from the request alone (a forged Host
 // header must not put another site in SEAL's buttons): PUBLIC_API_URL, else a known host.
@@ -63,7 +63,8 @@ router.use("/leads", (_req, res, next) => {
 // ── anonymous funnel events ────────────────────────────────────────────────
 router.post("/events", (req, res) => {
   const b = req.body || {};
-  recordEvent(clean(b.event, 40), clean(b.vid, 64));
+  // QA sessions are counted apart: they never inflate the commercial funnel
+  recordEvent(clean(b.event, 40), clean(b.vid, 64), Date.now(), b.qa === true);
   res.status(204).end();
 });
 
@@ -88,7 +89,7 @@ router.get("/leads/act/:id", (req, res) => {
       <form method="post" class="card">
         <input type="hidden" name="s" value="${e(s)}"><input type="hidden" name="t" value="${e(t)}">
         ${transfer ? `<label>Empresa del grupo</label><select name="transferTo" required><option value="">Elegir…</option>${GROUP_COMPANIES.map((c) => `<option>${e(c)}</option>`).join("")}</select>
-        <label>Persona que valida la derivación (obligatorio)</label><input name="validatedBy" required maxlength="120">` : `<label>Quién registra (opcional)</label><input name="by" maxlength="120">`}
+        <label>Persona que valida la derivación (obligatorio)</label><input name="validatedBy" required maxlength="120">` : `<label>Tu nombre (obligatorio: queda registrado quién hizo el cambio y cuándo)</label><input name="by" required maxlength="120">`}
         <label>Nota (opcional)</label><textarea name="note" rows="3" maxlength="500"></textarea>
         <button type="submit">Confirmar: ${e(LABEL[s])}</button>
         ${transfer ? `<p class="muted">SEAL atiende primero el caso; la derivación no es automática y queda registrada con quién la validó.</p>` : ""}
@@ -106,7 +107,7 @@ router.post("/leads/act/:id", (req, res) => {
       ? updateLead(l.id, { transferTo: clean(b.transferTo, 40), validatedBy: clean(b.validatedBy, 120), note: clean(b.note, 500) })
       : updateLead(l.id, { status: s, by: clean(b.by, 120), note: clean(b.note, 500) });
   if (r.error) {
-    const msg = r.error === "validation_required" ? "Falta el nombre de la persona que valida la derivación." : r.error === "unknown_company" ? "Elige una empresa del grupo." : "No se pudo registrar.";
+    const msg = r.error === "validation_required" || r.error === "who_required" ? (s === "derivar" ? "Falta el nombre de la persona que valida la derivación." : "Falta tu nombre: queda registrado quién hizo el cambio.") : r.error === "unknown_company" ? "Elige una empresa del grupo." : "No se pudo registrar.";
     return res.status(400).send(page("Error", `<h1 class="err">${e(msg)}</h1><p><a href="?s=${encodeURIComponent(s)}&t=${encodeURIComponent(clean(b.t, 64))}">Volver</a></p>`));
   }
   res.send(page("Registrado", `<h1 class="ok">Registrado: ${e(LABEL[s])}</h1>${caseSummary(r.lead)}`));
@@ -159,6 +160,8 @@ router.get("/leads/case/:id", async (req, res) => {
     case: c,
   };
   const event = l.notified ? await deliveryOf(l) : "";
+  data.notifiedTo = l.notifiedTo || []; // masked addresses
+  data.test = !!l.test;
   data.notification = {
     sent: !!l.notified,
     delivery: event,
@@ -189,6 +192,9 @@ router.get("/leads/funnel", (req, res) => {
   const since = Date.now() - days * 86400000;
   const ev = eventTotals(new Date(since).toISOString().slice(0, 10));
   const lf = leadFunnel({ sinceMs: since });
+  const qaEv = eventTotals(new Date(since).toISOString().slice(0, 10), true);
+  const qaTotal = Object.values(qaEv).reduce((x, y) => x + y, 0);
+  const rc = recipientConfig();
   const stages = [
     ["Visitas", ev.visita],
     ["Consultas iniciadas", ev.consulta_iniciada],
@@ -198,7 +204,7 @@ router.get("/leads/funnel", (req, res) => {
     ["Cotizaciones", lf.cotizaciones],
     ["Clientes", lf.clientes],
   ];
-  if (req.query.format === "json") return res.json({ days, stages: Object.fromEntries(stages), events: ev, leads: lf });
+  if (req.query.format === "json") return res.json({ days, stages: Object.fromEntries(stages), events: ev, qaEvents: qaEv, leads: lf, recipients: rc });
   const rows = stages.map(([k, v], i) => `<tr><td>${i + 1}. ${e(k)}</td><td class="n">${v}</td><td class="muted">${i && stages[i - 1][1] ? `${Math.round((v / stages[i - 1][1]) * 100)}% del paso anterior` : ""}</td></tr>`).join("");
   res.send(
     page(
@@ -206,13 +212,14 @@ router.get("/leads/funnel", (req, res) => {
       `<h1>Embudo — últimos ${days} días</h1><div class="card"><table>${rows}</table></div>
       <div class="card"><table>
         <tr><td>Clics en WhatsApp (no son leads: no se sabe si escribieron)</td><td class="n">${ev.whatsapp_clic}</td></tr>
+        <tr><td>Eventos de sesiones de prueba (excluidos de arriba)</td><td class="n">${qaTotal}</td></tr>
         <tr><td>Formularios de contacto abiertos</td><td class="n">${ev.contacto_abierto}</td></tr>
         <tr><td>Envíos repetidos agrupados en el mismo caso</td><td class="n">${lf.repetidasAgrupadas}</td></tr>
         <tr><td>Casos sin contacto registrado</td><td class="n">${lf.sinAtender}</td></tr>
         <tr><td>Casos cuyo correo a SEAL falló (revisar)</td><td class="n">${lf.sinNotificar}</td></tr>
         <tr><td>Contactados / descartados</td><td class="n">${lf.contactados} / ${lf.descartados}</td></tr>
       </table></div>
-      <p class="muted">Visitas, consultas y resultados se cuentan una vez por navegador y día. Calificados, cotizaciones y clientes se registran a mano desde el correo de cada caso. Excluye registros de prueba. <a href="?t=${e(clean(req.query.t, 64))}&days=7">7 días</a> · <a href="?t=${e(clean(req.query.t, 64))}&days=30">30 días</a> · <a href="?t=${e(clean(req.query.t, 64))}&days=90">90 días</a></p>`,
+      <p class="muted">Visitas, consultas y resultados se cuentan una vez por navegador y día. Calificados, cotizaciones y clientes se registran a mano desde el correo de cada caso. Excluye registros y sesiones de prueba. Destinatarios: casos reales → ${rc.commercial} buzón(es) comercial(es)${rc.devGetsReal ? ` + ${rc.devCopies} copia(s) de desarrollo (autorizado)` : ""}; pruebas → ${rc.qaInbox ? "buzón QA" : "buzón comercial"} + ${rc.devCopies} copia(s) de desarrollo. <a href="?t=${e(clean(req.query.t, 64))}&days=7">7 días</a> · <a href="?t=${e(clean(req.query.t, 64))}&days=30">30 días</a> · <a href="?t=${e(clean(req.query.t, 64))}&days=90">90 días</a></p>`,
     ),
   );
 });

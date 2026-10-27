@@ -4,12 +4,12 @@ import { searchSuppliers } from "../services/alibaba.js";
 import { scoreSuppliers, categorizeSuppliers } from "../services/scoring.js";
 import { refineKeyword, shortenKeyword } from "./ai.js";
 import { clientIp, clean } from "../middleware/security.js";
-import { sendSearchLead } from "../services/email.js";
+import { sendSearchLead, scrubEmails } from "../services/email.js";
 
 // Send the search to SEAL sales without delaying the user's response
 function notifySearch(details) {
   sendSearchLead(details).catch((err) =>
-    console.error("⚠️ Search lead email failed:", err.message),
+    console.error("⚠️ Search lead email failed:", scrubEmails(err.message)),
   );
 }
 
@@ -102,7 +102,7 @@ router.post("/search", async (req, res) => {
     // Same rule as the frontend: the description must say what the product is.
     // Nothing is searched or counted ("abc" used to return unrelated products).
     if (!descriptionIsDetailed(userQuery)) {
-      console.log(`⚠️ Description too vague: "${String(userQuery || "").slice(0, 60)}"`);
+      console.log(`⚠️ Description too vague (${String(userQuery || "").length} chars)`);
       ticket.release();
       return res.json({
         needsMoreDetail: true,
@@ -122,7 +122,8 @@ router.post("/search", async (req, res) => {
     const bdg = Number.isFinite(bdgNum) && bdgNum > 0 ? Math.min(bdgNum, 100_000_000) : 50000;
 
     console.log(`\n🔍 Search request`);
-    console.log(`   User Query:  "${userQuery || "(none)"}"`);
+    // the client's own words are not logged (they can carry names, phones or emails)
+    console.log(`   User Query:  ${String(userQuery || "").length} chars`);
     console.log(`   ProductType: ${productType}`);
     console.log(`   Material:    ${material || "(none)"}`);
     console.log(`   Quantity:    ${qty}`);

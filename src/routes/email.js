@@ -4,6 +4,8 @@ import {
   sendReportToUser,
   sendCaseToSeal,
   testTag,
+  isTestRecord,
+  scrubEmails,
 } from "../services/email.js";
 import { registerLead, markNotified, leadsPersistent } from "../services/leadStore.js";
 import { linksFor, baseUrl, caseLink } from "./leads.js";
@@ -94,7 +96,7 @@ router.post("/quote", async (req, res) => {
       intent: clean(b.intent, 60),
       requestType: clean(b.requestType, 80) || "Solicitud de cotización",
       lang: b.lang,
-      test: !!testTag(contact.name, contact.email),
+      test: isTestRecord(contact.name, contact.email),
     });
     // an identical repeat of an open case is not emailed again (unless the first email
     // failed); a repeat with new information goes to SEAL as an update of the same case
@@ -103,18 +105,19 @@ router.post("/quote", async (req, res) => {
     if (!duplicate || lead.notified === false || update) {
       try {
         const sent = await sendCaseToSeal(lead, linksFor(lead, baseUrl(req)), update);
-        markNotified(lead.id, true, "", Date.now(), sent?.id);
+        markNotified(lead.id, true, "", Date.now(), sent?.id, sent?.to);
         notified = true;
       } catch (err) {
-        console.error("❌ case email failed:", lead.id, err.message);
-        markNotified(lead.id, false, err.message);
+        console.error("❌ case email failed:", lead.id, scrubEmails(err.message));
+        markNotified(lead.id, false, scrubEmails(err.message));
         notified = false;
         // without a saved registry an unsent email would lose the case
         if (!leadsPersistent) return res.status(500).json({ error: "Could not send email" });
       }
     }
     // the client can see what SEAL received and the case status (signed link)
-    res.json({ success: true, id: lead.id, duplicate, notified: notified !== false, caseUrl: caseLink(lead, baseUrl(req)) });
+    // test: the site doesn't count it as a commercial lead (analytics)
+    res.json({ success: true, id: lead.id, duplicate, notified: notified !== false, test: !!lead.test, caseUrl: caseLink(lead, baseUrl(req)) });
   } catch (err) {
     console.error("❌ /email/quote:", err.message);
     res.status(500).json({ error: "Could not send email" });
