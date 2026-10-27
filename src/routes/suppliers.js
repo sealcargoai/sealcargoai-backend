@@ -21,6 +21,8 @@ import {
   limitReason,
   remainingSearches,
   reserveSearch,
+  hasSearched,
+  reportToken,
 } from "../services/quotaStore.js";
 
 // A description needs at least 10 characters and 2 real words (one of 4+ letters)
@@ -166,6 +168,7 @@ router.post("/search", async (req, res) => {
         fromCache: true,
         searchKeyword: keyword,
         remainingSearches: remainingSearches(userEmail, ip),
+        ...(userEmail && hasSearched(userEmail) ? { reportToken: reportToken(userEmail) } : {}),
       });
     }
 
@@ -248,6 +251,7 @@ router.post("/search", async (req, res) => {
       fromCache: false,
       searchKeyword: usedKeyword,   // ← return so frontend knows what was searched
       remainingSearches: remainingSearches(userEmail, ip),
+      ...(userEmail && hasSearched(userEmail) ? { reportToken: reportToken(userEmail) } : {}),
     });
 
   } catch (error) {

@@ -5,7 +5,7 @@ import {
   sendReportToUser,
 } from "../services/email.js";
 import { isEmail, clean } from "../middleware/security.js";
-import { hasSearched, emailKey } from "../services/quotaStore.js";
+import { hasSearched, emailKey, verifyReportToken } from "../services/quotaStore.js";
 
 // Reports go out from SEAL's address: only someone who ran a search may send
 // one, and each recipient gets a few per day (no open relay)
@@ -87,7 +87,8 @@ router.post("/report", async (req, res) => {
       return res.status(400).json({ error: "a valid recipientEmail is required" });
     }
     const requester = clean(b.requesterEmail, 254);
-    if (!isEmail(requester) || !hasSearched(requester)) {
+    // the requester must have searched AND hold the token that search returned
+    if (!isEmail(requester) || !hasSearched(requester) || !verifyReportToken(requester, b.reportToken)) {
       return res.status(403).json({ error: "report_not_allowed", message: "Only the person who ran the search can send this report." });
     }
     const toKey = emailKey(recipientEmail);
@@ -114,9 +115,11 @@ router.post("/report", async (req, res) => {
       recipientName: clean(b.recipientName, 120),
       requesterEmail: requester,
       pdfBuffer,
-      supplierName: clean(b.supplierName, 200),
+      // no links or addresses in what goes into the subject and body
+      supplierName: clean(b.supplierName, 200).replace(/https?:\/\/\S+|www\.\S+|\b[\w.-]+\.(?:com|net|org|io|xyz|info|top|ru|cn)\b\S*/gi, "").replace(/\s+/g, " ").trim().slice(0, 100),
       totalCost: Number(b.totalCost) || 0,
-      totalCostText: clean(b.totalCostText, 80),
+      totalCostText: clean(b.totalCostText, 80).replace(/[^\dQUS$.,()\s]/g, "").slice(0, 60),
+      lang: b.lang === "en" ? "en" : "es",
     });
     res.json({ success: true, delivered: result.delivered, forwarded: !!result.forwarded });
   } catch (err) {

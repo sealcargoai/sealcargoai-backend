@@ -25,6 +25,11 @@ export const DEFAULT_RATES = {
   insuranceMin: 250,
   customsFees: 200,
   localCharges: 450,
+  // the same fixed amounts in quetzales and the exchange rate the frontend uses, so
+  // the sheet can change them too (they used to be ignored: the keys were missing)
+  customsFeesGTQ: 1200,
+  localChargesGTQ: 9500,
+  exchangeRate: 7.9,
   transitDays: "30-45",
 };
 
@@ -60,7 +65,11 @@ function parseValue(key, raw) {
   const isPct = str.endsWith("%");
   let n = parseFloat(str.replace("%", ""));
   if (!Number.isFinite(n)) return undefined;
-  if (PERCENT_KEYS.has(key) && (isPct || n > 1)) n = n / 100;
+  // "15", "15%" and "0.15" are all 15%; "1" is 1% (a DAI of 1 would be 100% otherwise)
+  if (PERCENT_KEYS.has(key) && (isPct || n >= 1)) n = n / 100;
+  // a rate above 100% or a negative amount is a typo in the sheet: keep the default
+  if (PERCENT_KEYS.has(key) && !(n >= 0 && n <= 1)) return undefined;
+  if (!PERCENT_KEYS.has(key) && n < 0) return undefined;
   return n;
 }
 
