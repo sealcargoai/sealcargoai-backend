@@ -53,6 +53,7 @@ before(async () => { srv = await start(); });
 after(async () => { await stop(srv); fs.rmSync(dir, { recursive: true, force: true }); });
 
 let first;
+const firstId = () => first.id;
 test("a request is registered with a case number and SEAL gets the whole context", async () => {
   const r = await post("/api/email/quote", CASE);
   assert.equal(r.status, 200);
@@ -69,12 +70,14 @@ test("a request is registered with a case number and SEAL gets the whole context
 });
 
 test("the same person, product and supplier again is the same case: no duplicate, no second email", async () => {
-  const r = await post("/api/email/quote", { ...CASE, email: "Ana.Perez@Empresa.com.gt", message: "¿Recibieron mi solicitud?" }, "10.0.0.2");
+  const r = await post("/api/email/quote", { ...CASE, email: "Ana.Perez@Empresa.com.gt" }, "10.0.0.2");
   const j = await r.json();
   assert.equal(j.id, first.id);
   assert.equal(j.duplicate, true);
   assert.equal(mails().length, 1);
 });
+
+
 
 test("another product is another case", async () => {
   const j = await (await post("/api/email/quote", { ...CASE, product: "Mochilas escolares", productDescription: "Mochilas escolares", supplierName: "", supplierUrl: "" }, "10.0.0.3")).json();
@@ -158,4 +161,41 @@ test("test records are flagged and kept out of the funnel", async () => {
   const j = await (await post("/api/email/quote", { ...CASE, name: "Prueba QA", email: "qa@example.com" }, "10.0.0.9")).json();
   assert.match(mails().at(-1).subject, /^\[PRUEBA\]/);
   assert.ok(j.id);
+});
+
+test("a price typed by the user is labeled as such; the client's case page shows what SEAL received and its status", async () => {
+  const r = await post("/api/email/quote", { ...CASE, product: "Bolsas", productDescription: "Bolsas", supplierName: "", supplierUrl: "", price: "US$0.05 / unidad", priceSource: "usuario", publishedPrice: "US$0.04 / unidad" }, "10.0.0.20");
+  const j = await r.json();
+  const m = mails().at(-1);
+  assert.match(m.html, /Precio indicado por el usuario<\/td><td[^>]*><b>US\$0\.05/);
+  assert.match(m.html, /Precio publicado<\/td><td[^>]*><b>US\$0\.04/);
+  assert.ok(j.caseUrl && j.caseUrl.includes(`/api/leads/case/${j.id}?t=`));
+  const u = new URL(j.caseUrl);
+  const page = await (await fetch(BASE + u.pathname + u.search)).text();
+  assert.match(page, /Recibido por SEAL — pendiente de contacto/);
+  assert.match(page, /Precio indicado por el usuario/);
+  assert.match(page, /Ya tengo proforma/);
+  const data = await (await fetch(BASE + u.pathname + u.search + "&format=json")).json();
+  assert.equal(data.case.priceSource, "usuario");
+  assert.equal((await fetch(BASE + u.pathname + "?t=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")).status, 404);
+  // a published price is never labeled as the user's
+  await post("/api/email/quote", { ...CASE, product: "Cajas", productDescription: "Cajas", supplierName: "", supplierUrl: "", price: "US$1.00" }, "10.0.0.21");
+  assert.doesNotMatch(mails().at(-1).html, /indicado por el usuario/);
+});
+
+test("the same case with new information: same number, SEAL gets one update email saying what changed", async () => {
+  const base = { ...CASE, product: "Lámparas LED", productDescription: "Lámparas LED", supplierName: "Shenzhen Lamp", supplierUrl: "" };
+  const firstCase = await (await post("/api/email/quote", base, "10.0.0.24")).json();
+  const n = mails().length;
+  const j = await (await post("/api/email/quote", { ...base, message: "Cambió el precio", price: "US$2.40 por pieza", priceSource: "usuario" }, "10.0.0.22")).json();
+  assert.equal(j.id, firstCase.id);
+  assert.equal(j.duplicate, true);
+  assert.equal(mails().length, n + 1);
+  const m = mails().at(-1);
+  assert.match(m.subject, new RegExp(`^Actualización · Caso ${firstCase.id}`));
+  assert.match(m.html, /Actualización del mismo caso/);
+  assert.match(m.html, /precio, origen del precio, mensaje|mensaje.*precio|precio.*mensaje/);
+  // sent again unchanged: nothing new, no email
+  await post("/api/email/quote", { ...base, message: "Cambió el precio", price: "US$2.40 por pieza", priceSource: "usuario" }, "10.0.0.23");
+  assert.equal(mails().length, n + 1);
 });
