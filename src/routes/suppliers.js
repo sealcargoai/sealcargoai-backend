@@ -3,7 +3,7 @@ import NodeCache from "node-cache";
 import { searchSuppliers } from "../services/alibaba.js";
 import { scoreSuppliers, categorizeSuppliers } from "../services/scoring.js";
 import { refineKeyword, shortenKeyword } from "./ai.js";
-import { clientIp, clean, connectionInfo } from "../middleware/security.js";
+import { clientIp, clean } from "../middleware/security.js";
 import { sendSearchLead } from "../services/email.js";
 
 // Send the search to SEAL sales without delaying the user's response
@@ -41,18 +41,9 @@ setInterval(() => {
   for (const [k, at] of seen) if (now - at > 3600 * 1000) seen.delete(k);
 }, 10 * 60 * 1000).unref();
 
-router.get("/test", (_req, res) => {
-  res.json({
-    message: "✅ Suppliers route working",
-    rapidApi: !!process.env.RAPIDAPI_KEY,
-    grok: !!process.env.GROK_API_KEY,
-  });
-});
 
 // The form asks before offering a search, so it never shows a number the
 // server would contradict. Read-only: nothing is counted here.
-// Diagnostic: how the server sees the caller's own connection
-router.get("/whoami", (req, res) => res.json(connectionInfo(req)));
 
 router.get("/quota", (req, res) => {
   const email = normalizeEmail(typeof req.query.email === "string" ? req.query.email : "");
@@ -152,7 +143,8 @@ router.post("/search", async (req, res) => {
       console.log("⚡ Cache hit\n");
       // repeating one's own search is free; someone else's (or a rephrased) one counts
       const seenKey = `${userEmail || ip}|${cacheKey}`;
-      if (seen.has(seenKey)) ticket.release();
+      // a cached result with no supplier to show counts nothing, as on the first run
+      if (seen.has(seenKey) || !cached.topSuppliers?.length) ticket.release();
       else {
         seen.set(seenKey, Date.now());
         ticket.commit();

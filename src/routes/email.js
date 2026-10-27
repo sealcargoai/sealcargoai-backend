@@ -100,8 +100,9 @@ router.post("/report", async (req, res) => {
     let pdfBuffer = null;
     if (typeof b.pdfBase64 === "string" && b.pdfBase64.length > 0) {
       pdfBuffer = Buffer.from(b.pdfBase64, "base64");
-      // Must really be a PDF
-      if (pdfBuffer.subarray(0, 4).toString() !== "%PDF") {
+      // Must really be a PDF (header and end marker), and a report-sized one
+      const tail = pdfBuffer.subarray(Math.max(0, pdfBuffer.length - 1024)).toString("latin1");
+      if (pdfBuffer.subarray(0, 5).toString() !== "%PDF-" || !tail.includes("%%EOF") || pdfBuffer.length > 3 * 1024 * 1024) {
         return res.status(400).json({ error: "invalid PDF" });
       }
     }
@@ -111,6 +112,7 @@ router.post("/report", async (req, res) => {
     const result = await sendReportToUser({
       recipientEmail,
       recipientName: clean(b.recipientName, 120),
+      requesterEmail: requester,
       pdfBuffer,
       supplierName: clean(b.supplierName, 200),
       totalCost: Number(b.totalCost) || 0,
