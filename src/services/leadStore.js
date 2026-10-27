@@ -106,12 +106,13 @@ export function getLead(id) {
 }
 
 /** Whether SEAL's inbox got the case email (false = only in the registry: check it). */
-export function markNotified(id, ok, error = "", now = Date.now(), emailId = "") {
+export function markNotified(id, ok, error = "", now = Date.now(), emailId = "", to = []) {
   const l = getLead(id);
   if (!l) return;
   l.notified = !!ok;
   // the email service's id: lets the case page check the delivery
   if (ok && emailId) l.emailIds = [...(l.emailIds || []), String(emailId).slice(0, 80)].slice(-10);
+  if (ok && Array.isArray(to) && to.length) l.notifiedTo = to.map((x) => String(x).slice(0, 80)).slice(0, 10); // masked
   if (!ok) l.notifyError = String(error).slice(0, 200);
   l.history.push({ at: now, action: ok ? "notificado" : "notificacion_fallida", note: ok ? "" : String(error).slice(0, 200) });
   scheduleSave();
@@ -124,7 +125,10 @@ export function markNotified(id, ok, error = "", now = Date.now(), emailId = "")
 export function updateLead(id, { status, note = "", by = "", transferTo = "", validatedBy = "" }, now = Date.now()) {
   const l = getLead(id);
   if (!l) return { error: "not_found" };
-  const entry = { at: now, action: "estado", note: String(note).slice(0, 500), by: String(by).slice(0, 120) };
+  // every change records who made it (a person) and when
+  const who = String(by || validatedBy || "").trim().slice(0, 120);
+  if (!who) return { error: "who_required" };
+  const entry = { at: now, action: "estado", note: String(note).slice(0, 500), by: who };
   if (transferTo) {
     if (!GROUP_COMPANIES.includes(transferTo)) return { error: "unknown_company" };
     if (!String(validatedBy).trim()) return { error: "validation_required" };

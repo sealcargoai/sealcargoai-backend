@@ -1,5 +1,6 @@
 import { Resend } from "resend";
 import { escapeHtml as e } from "../middleware/security.js";
+import { isQa } from "./quotaStore.js";
 
 /* ─────────────────────────────────────────────
    Safe Resend Client Creator
@@ -14,19 +15,41 @@ function getResendClient() {
   return new Resend(apiKey);
 }
 
-// Leads always go to SEAL sales; ADMIN_EMAIL / ADMIN2_EMAIL get a copy if set
+// ── Who receives what ─────────────────────────────────────────────────────────
+// Real client data goes ONLY to SEAL's commercial owners:
+//   LEADS_EMAIL (default ventas@seal.com.gt) + LEADS_CC (comma list, optional, authorized
+//   commercial copies).
+// Development copies (ADMIN_EMAIL, ADMIN2_EMAIL, QA_NOTIFY_EMAILS) receive ONLY identified
+// test records, unless DEV_COPIES_REAL_LEADS=1 records an explicit authorization.
+// Test records go to QA_LEADS_EMAIL when set (a QA inbox), else to the commercial inbox
+// (marked [PRUEBA]), plus the development copies.
 const LEADS_EMAIL = process.env.LEADS_EMAIL || "ventas@seal.com.gt";
+const emailList = (...values) =>
+  [...new Set(values.flatMap((v) => String(v || "").split(",")).map((x) => x.trim().toLowerCase()).filter((x) => /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/.test(x)))];
+const COMMERCIAL = emailList(LEADS_EMAIL, process.env.LEADS_CC);
+const DEV_COPIES = emailList(process.env.ADMIN_EMAIL, process.env.ADMIN2_EMAIL, process.env.QA_NOTIFY_EMAILS).filter((x) => !COMMERCIAL.includes(x));
+const QA_INBOX = emailList(process.env.QA_LEADS_EMAIL);
+const DEV_GETS_REAL = process.env.DEV_COPIES_REAL_LEADS === "1";
 
-// Test records (fictitious name/email) are flagged so sales doesn't follow them up
+// Test records (fictitious name/email, or a QA account) are flagged so sales doesn't follow them up
 const TEST_RE = /\b(prueba|test|testing|ficticio|ficticia|demo|fake|ejemplo)\b|@(example|test|prueba|mailinator)\./i;
 export function testTag(...values) {
   return values.some((v) => TEST_RE.test(String(v || ""))) ? "[PRUEBA] " : "";
 }
-const adminEmails = [...new Set(
-  [LEADS_EMAIL, process.env.ADMIN_EMAIL, process.env.ADMIN2_EMAIL]
-    .filter(Boolean)
-    .map((x) => x.trim().toLowerCase()),
-)];
+/** A test record: test words in the name/email, or an email in QA_EMAILS. */
+export function isTestRecord(name, email) {
+  return !!testTag(name, email) || isQa(email);
+}
+/** Recipients for a record: real → commercial only; test → QA inbox (or commercial) + dev copies. */
+export function recipientsFor(test) {
+  if (test) return [...new Set([...(QA_INBOX.length ? QA_INBOX : COMMERCIAL), ...DEV_COPIES])];
+  return [...new Set([...COMMERCIAL, ...(DEV_GETS_REAL ? DEV_COPIES : [])])];
+}
+/** "ve***@seal.com.gt": shows where it went without exposing addresses. */
+export const maskEmail = (x) => String(x).replace(/^(.{1,2})[^@]*@/, "$1***@");
+/** No addresses in logs or stored error notes. */
+export const scrubEmails = (text) => String(text || "").replace(/[^\s@<>()"',;:]+@[^\s@<>()"',;:]+\.[a-z]{2,}/gi, "[correo]");
+export const recipientConfig = () => ({ commercial: COMMERCIAL.length, devCopies: DEV_COPIES.length, qaInbox: QA_INBOX.length, devGetsReal: DEV_GETS_REAL });
 
 const FROM_EMAIL =
   process.env.RESEND_FROM ||
@@ -66,7 +89,7 @@ export async function sendLeadNotification({ name, email, query }) {
 
   const { data, error } = await resend.emails.send({
     from: FROM_EMAIL,
-    to: adminEmails,
+    to: recipientsFor(isTestRecord(name, email)),
     replyTo: email,
     subject: `${testTag(name, email)}Nuevo prospecto: ${name.replace(/[\r\n]/g, " ")}`,
     html: emailWrapper("New Lead Notification", content),
@@ -108,7 +131,7 @@ export async function sendSearchLead({
 
   const { data, error } = await resend.emails.send({
     from: FROM_EMAIL,
-    to: adminEmails,
+    to: recipientsFor(isTestRecord("", email) || !!testTag(userQuery)),
     ...(email ? { replyTo: email } : {}),
     subject: `${testTag(email, userQuery)}Búsqueda: ${String(userQuery || productType || "producto").replace(/[\r\n]/g, " ").slice(0, 80)}${email ? " — " + email : ""}`,
     html: emailWrapper("Nuevo prospecto calificado", content),
@@ -131,7 +154,7 @@ export async function sendQuoteRequest(data) {
 
   const { data: result, error } = await resend.emails.send({
     from: FROM_EMAIL,
-    to: adminEmails,
+    to: recipientsFor(isTestRecord(data.name, data.email)),
     replyTo: data.email,
     subject: `${testTag(data.name, data.email)}${String(data.requestType || "Solicitud de cotización").replace(/[\r\n]/g, " ")} — ${String(data.name).replace(/[\r\n]/g, " ")}`,
     html: emailWrapper("Quote Request", content),
@@ -214,13 +237,14 @@ export async function sendCaseToSeal(lead, links, update = null) {
   const product = String(c.product || c.description || "").replace(/[\r\n]/g, " ").slice(0, 60);
   const { data, error } = await resend.emails.send({
     from: FROM_EMAIL,
-    to: adminEmails,
+    to: recipientsFor(!!lead.test),
     replyTo: lead.contact.email,
     subject: `${lead.test ? "[PRUEBA] " : ""}${update ? "Actualización · " : ""}Caso ${lead.id}: ${String(lead.requestType || "Solicitud").replace(/[\r\n]/g, " ")} — ${String(lead.contact.name).replace(/[\r\n]/g, " ")}${product ? ` (${product})` : ""}`,
     html: caseEmailHtml(lead, links, update),
   });
-  if (error) throw new Error(error.message);
-  return data;
+  if (error) throw new Error(scrubEmails(error.message));
+  // where it went, masked (shown on the case page as evidence, without addresses)
+  return { ...data, to: recipientsFor(!!lead.test).map(maskEmail) };
 }
 
 /**
@@ -247,7 +271,7 @@ export async function sendFollowUpReminder(list, linksFor) {
     .join("");
   const { error } = await resend.emails.send({
     from: FROM_EMAIL,
-    to: adminEmails,
+    to: recipientsFor(false), // reminders list real cases only (tests are skipped)
     subject: `Seguimiento pendiente: ${list.length} caso${list.length === 1 ? "" : "s"} sin contacto registrado`,
     html: emailWrapper("Casos sin seguimiento", `<p>Estos casos llevan más de un día sin que nadie registre el contacto:</p><ul style="padding-left:18px">${rows}</ul>`),
   });
@@ -273,6 +297,7 @@ export async function sendReportToUser({
     ? [{ filename: `SEAL_${en ? "Report" : "Informe"}_${Date.now()}.pdf`, content: pdfBuffer }]
     : [];
   const other = requesterEmail && requesterEmail.toLowerCase() !== String(recipientEmail).toLowerCase();
+  const reportTest = isTestRecord(recipientName, recipientEmail) || isTestRecord("", requesterEmail);
   const total = e(totalCostText || "US$" + Number(totalCost || 0).toLocaleString("en-US"));
 
   // the client's language, as in the PDF they chose
@@ -297,7 +322,7 @@ export async function sendReportToUser({
   const { data, error } = await resend.emails.send({
     from: FROM_EMAIL,
     to: recipientEmail,
-    bcc: adminEmails,
+    bcc: recipientsFor(reportTest),
     subject: `${en ? "Your SEAL report" : "Su informe SEAL"}${supplierName ? ` - ${String(supplierName).replace(/[\r\n]/g, " ")}` : ""}`,
     html: emailWrapper(en ? "Import analysis report" : "Informe de análisis de importación", content),
     attachments,
@@ -307,16 +332,16 @@ export async function sendReportToUser({
 
   // Resend can refuse external recipients (e.g. sender domain not verified).
   // Don't lose the lead: send the report to SEAL sales so they forward it.
-  console.error("⚠️ Report to client failed, forwarding to SEAL:", error.message);
+  console.error("⚠️ Report to client failed, forwarding to SEAL:", scrubEmails(error.message));
   const fwd = await resend.emails.send({
     from: FROM_EMAIL,
-    to: adminEmails,
+    to: recipientsFor(reportTest),
     replyTo: recipientEmail,
     subject: `${testTag(recipientName, recipientEmail)}REENVIAR informe a cliente: ${recipientEmail}`,
     html: emailWrapper(
       "Informe pendiente de reenviar",
       `<p><b>No se pudo enviar el informe directo al cliente.</b> Reenvíelo a <b>${e(recipientEmail)}</b>.</p>
-       <p>Motivo técnico: ${e(error.message)}</p>${content}`,
+       <p>Motivo técnico: ${e(scrubEmails(error.message))}</p>${content}`,
     ),
     attachments,
   });

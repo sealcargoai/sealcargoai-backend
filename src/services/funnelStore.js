@@ -19,7 +19,7 @@ let seen = new Set(); // hashes of vid|event for seenDay
 const dayOf = (now) => new Date(now).toISOString().slice(0, 10);
 
 /** Counts one event; false when this browser already counted it today or it's unknown. */
-export function recordEvent(event, vid, now = Date.now()) {
+export function recordEvent(event, vid, now = Date.now(), qa = false) {
   if (!EVENTS.includes(event)) return false;
   const v = typeof vid === "string" && /^[a-z0-9-]{8,64}$/i.test(vid) ? vid : "";
   if (!v) return false;
@@ -28,19 +28,29 @@ export function recordEvent(event, vid, now = Date.now()) {
     seenDay = day;
     seen = new Set();
   }
-  const h = crypto.createHash("sha256").update(`${v}|${event}`).digest("base64url").slice(0, 16);
+  const h = crypto.createHash("sha256").update(`${v}|${event}|${qa ? 1 : 0}`).digest("base64url").slice(0, 16);
   if (seen.has(h)) return false;
   seen.add(h);
+  // QA sessions go to their own counter, never to the commercial funnel
+  const key = qa ? `qa:${event}` : event;
   days[day] = days[day] || {};
-  days[day][event] = (days[day][event] || 0) + 1;
+  days[day][key] = (days[day][key] || 0) + 1;
   scheduleSave();
   return true;
 }
 
 /** Totals per event from `sinceDay` (inclusive). */
-export function eventTotals(sinceDay = "0000-00-00") {
+export function eventTotals(sinceDay = "0000-00-00", qa = false) {
   const out = Object.fromEntries(EVENTS.map((e) => [e, 0]));
-  for (const [d, counts] of Object.entries(days)) if (d >= sinceDay) for (const [e, n] of Object.entries(counts)) out[e] = (out[e] || 0) + n;
+  for (const [d, counts] of Object.entries(days)) {
+    if (d < sinceDay) continue;
+    for (const [k, n] of Object.entries(counts)) {
+      const isQa = k.startsWith("qa:");
+      if (isQa !== qa) continue;
+      const e = isQa ? k.slice(3) : k;
+      out[e] = (out[e] || 0) + n;
+    }
+  }
   return out;
 }
 

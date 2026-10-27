@@ -157,7 +157,12 @@ if (!reportSecret) {
   if (!reportSecret) {
     reportSecret = crypto.randomBytes(32).toString("hex");
     try {
-      if (file) fs.writeFileSync(file, reportSecret, { mode: 0o600 });
+      // the folder may not exist yet on a fresh volume: without the file, every signed
+      // link (follow-up buttons, case pages) would stop working after a restart
+      if (file) {
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(file, reportSecret, { mode: 0o600 });
+      }
     } catch {
       /* no volume: in memory only */
     }
