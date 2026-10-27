@@ -60,14 +60,22 @@ export function registerLead(input, now = Date.now()) {
   if (existing) {
     existing.repeats = (existing.repeats || 0) + 1;
     existing.updatedAt = now;
-    // the newest data completes the case (never erases what was there)
+    // the newest data completes the case (never erases what was there); what changed is
+    // reported to SEAL (same case number, no duplicate)
+    const changes = [];
     for (const [k, v] of Object.entries(input.case)) {
-      if (Array.isArray(v) ? v.length : v) existing.case[k] = v;
+      if (!(Array.isArray(v) ? v.length : v)) continue;
+      if (JSON.stringify(existing.case[k]) !== JSON.stringify(v)) changes.push(k);
+      existing.case[k] = v;
     }
-    for (const [k, v] of Object.entries(input.contact)) if (v) existing.contact[k] = v;
-    existing.history.push({ at: now, action: "repetida", source: input.source, requestType: input.requestType });
+    for (const [k, v] of Object.entries(input.contact)) {
+      if (!v) continue;
+      if (k !== "email" && existing.contact[k] !== v) changes.push(k);
+      existing.contact[k] = v;
+    }
+    existing.history.push({ at: now, action: changes.length ? "actualizada" : "repetida", source: input.source, requestType: input.requestType, changes });
     scheduleSave();
-    return { lead: existing, duplicate: true };
+    return { lead: existing, duplicate: true, changes };
   }
   const lead = {
     id: newId(now),
@@ -90,7 +98,7 @@ export function registerLead(input, now = Date.now()) {
   leads.push(lead);
   if (leads.length > MAX_LEADS) leads = leads.slice(-MAX_LEADS);
   scheduleSave();
-  return { lead, duplicate: false };
+  return { lead, duplicate: false, changes: [] };
 }
 
 export function getLead(id) {

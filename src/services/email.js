@@ -156,7 +156,13 @@ const STATUS_LABEL = {
 function fmtDate(ms) {
   return new Date(ms).toLocaleString("es-GT", { timeZone: "America/Guatemala", dateStyle: "medium", timeStyle: "short" });
 }
-export function caseEmailHtml(lead, links) {
+const FIELD_LABEL = {
+  product: "producto", description: "descripción", quantity: "cantidad", supplierName: "proveedor", supplierUrl: "enlace del proveedor",
+  price: "precio", priceSource: "origen del precio", publishedPrice: "precio publicado", totalCostText: "costo estimado", budget: "presupuesto",
+  destination: "destino", message: "mensaje", caseRef: "informe", assumptions: "supuestos", warnings: "advertencias", chat: "conversación",
+  name: "nombre", phone: "teléfono", company: "empresa",
+};
+export function caseEmailHtml(lead, links, update = null) {
   const c = lead.case || {};
   const p = lead.contact || {};
   const row = (label, value) =>
@@ -179,6 +185,7 @@ export function caseEmailHtml(lead, links) {
   return emailWrapper(
     `Caso ${lead.id}`,
     `
+    ${update ? `<p style="margin:0 0 12px;padding:10px;background:#e0f2fe;border-radius:6px"><b>Actualización del mismo caso</b> (no es un caso nuevo): el cliente cambió ${e(update.map((k) => FIELD_LABEL[k] || k).join(", "))}. Abajo está el caso completo, ya actualizado.</p>` : ""}
     <h2 style="margin-top:0">📥 ${e(lead.requestType || "Solicitud")} — caso ${e(lead.id)}</h2>
     <p style="margin:0 0 12px;color:#64748b">Recibido ${e(fmtDate(lead.createdAt))} · desde: ${e(lead.source || "—")}${lead.intent ? ` · intención: ${e(lead.intent)}` : ""}${lead.lang === "en" ? " · cliente en inglés" : ""}</p>
     <table style="border-collapse:collapse;width:100%">
@@ -188,7 +195,7 @@ export function caseEmailHtml(lead, links) {
     <table style="border-collapse:collapse;width:100%">
       ${row("Producto", c.product)}${row("Descripción", c.description && c.description !== c.product ? c.description : "")}
       ${row("Cantidad", c.quantity)}${row("Proveedor", c.supplierName)}${row("Enlace del proveedor", c.supplierUrl)}
-      ${row("Precio publicado", c.price)}${row("Costo total estimado", c.totalCostText)}${row("Presupuesto", c.budget)}
+      ${c.priceSource === "usuario" ? `${row("Precio indicado por el usuario", c.price)}${row("Precio publicado", c.publishedPrice)}` : row("Precio publicado", c.price)}${row("Costo total estimado", c.totalCostText)}${row("Presupuesto", c.budget)}
       ${row("Destino", c.destination)}${row("Informe del cliente", c.caseRef)}
     </table>
     ${c.message ? `<h3 style="margin:18px 0 6px;color:#0B3C5D">Mensaje del cliente</h3><p style="margin:0;white-space:pre-line">${e(c.message)}</p>` : ""}
@@ -201,7 +208,7 @@ export function caseEmailHtml(lead, links) {
   );
 }
 
-export async function sendCaseToSeal(lead, links) {
+export async function sendCaseToSeal(lead, links, update = null) {
   const resend = getResendClient();
   const c = lead.case || {};
   const product = String(c.product || c.description || "").replace(/[\r\n]/g, " ").slice(0, 60);
@@ -209,8 +216,8 @@ export async function sendCaseToSeal(lead, links) {
     from: FROM_EMAIL,
     to: adminEmails,
     replyTo: lead.contact.email,
-    subject: `${lead.test ? "[PRUEBA] " : ""}Caso ${lead.id}: ${String(lead.requestType || "Solicitud").replace(/[\r\n]/g, " ")} — ${String(lead.contact.name).replace(/[\r\n]/g, " ")}${product ? ` (${product})` : ""}`,
-    html: caseEmailHtml(lead, links),
+    subject: `${lead.test ? "[PRUEBA] " : ""}${update ? "Actualización · " : ""}Caso ${lead.id}: ${String(lead.requestType || "Solicitud").replace(/[\r\n]/g, " ")} — ${String(lead.contact.name).replace(/[\r\n]/g, " ")}${product ? ` (${product})` : ""}`,
+    html: caseEmailHtml(lead, links, update),
   });
   if (error) throw new Error(error.message);
   return data;
