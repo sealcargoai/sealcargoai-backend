@@ -173,10 +173,12 @@ test("a price typed by the user is labeled as such; the client's case page shows
   const u = new URL(j.caseUrl);
   const page = await (await fetch(BASE + u.pathname + u.search)).text();
   assert.match(page, /Recibido por SEAL — pendiente de contacto/);
+  assert.match(page, /Aviso a SEAL:<\/span> Entregado al correo de SEAL \(confirmado por el servicio de correo\)/);
   assert.match(page, /Precio indicado por el usuario/);
   assert.match(page, /Ya tengo proforma/);
   const data = await (await fetch(BASE + u.pathname + u.search + "&format=json")).json();
   assert.equal(data.case.priceSource, "usuario");
+  assert.deepEqual(data.notification, { sent: true, delivery: "delivered", deliveryText: "Entregado al correo de SEAL (confirmado por el servicio de correo)" });
   assert.equal((await fetch(BASE + u.pathname + "?t=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx")).status, 404);
   // a published price is never labeled as the user's
   await post("/api/email/quote", { ...CASE, product: "Cajas", productDescription: "Cajas", supplierName: "", supplierUrl: "", price: "US$1.00" }, "10.0.0.21");
