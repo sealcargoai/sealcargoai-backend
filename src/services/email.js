@@ -223,6 +223,22 @@ export async function sendCaseToSeal(lead, links, update = null) {
   return data;
 }
 
+/**
+ * What the email service knows about a sent email: "delivered" means SEAL's mail
+ * server accepted it (not that someone read it). "" when it can't be checked
+ * (e.g. a send-only API key).
+ */
+export async function emailDelivery(id) {
+  if (!id) return "";
+  try {
+    const { data, error } = await getResendClient().emails.get(id);
+    if (error || !data) return "";
+    return String(data.last_event || "");
+  } catch {
+    return "";
+  }
+}
+
 /** Cases nobody has marked as contacted yet. */
 export async function sendFollowUpReminder(list, linksFor) {
   const resend = getResendClient();

@@ -106,10 +106,12 @@ export function getLead(id) {
 }
 
 /** Whether SEAL's inbox got the case email (false = only in the registry: check it). */
-export function markNotified(id, ok, error = "", now = Date.now()) {
+export function markNotified(id, ok, error = "", now = Date.now(), emailId = "") {
   const l = getLead(id);
   if (!l) return;
   l.notified = !!ok;
+  // the email service's id: lets the case page check the delivery
+  if (ok && emailId) l.emailIds = [...(l.emailIds || []), String(emailId).slice(0, 80)].slice(-10);
   if (!ok) l.notifyError = String(error).slice(0, 200);
   l.history.push({ at: now, action: ok ? "notificado" : "notificacion_fallida", note: ok ? "" : String(error).slice(0, 200) });
   scheduleSave();
