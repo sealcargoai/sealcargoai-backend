@@ -163,6 +163,14 @@ if (!reportSecret) {
     }
   }
 }
+/** A signature with the same secret (lead status links, funnel page). */
+export function sign(text) {
+  return crypto.createHmac("sha256", reportSecret).update(`sig:${text}`).digest("base64url").slice(0, 32);
+}
+export function verifySigned(text, token) {
+  const want = sign(text);
+  return typeof token === "string" && token.length === want.length && crypto.timingSafeEqual(Buffer.from(want), Buffer.from(token));
+}
 export function reportToken(email) {
   const key = emailKey(email);
   if (!key) return "";

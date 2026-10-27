@@ -19,7 +19,7 @@ const LEADS_EMAIL = process.env.LEADS_EMAIL || "ventas@seal.com.gt";
 
 // Test records (fictitious name/email) are flagged so sales doesn't follow them up
 const TEST_RE = /\b(prueba|test|testing|ficticio|ficticia|demo|fake|ejemplo)\b|@(example|test|prueba|mailinator)\./i;
-function testTag(...values) {
+export function testTag(...values) {
   return values.some((v) => TEST_RE.test(String(v || ""))) ? "[PRUEBA] " : "";
 }
 const adminEmails = [...new Set(
@@ -142,6 +142,96 @@ export async function sendQuoteRequest(data) {
 }
 
 /* ─────────────────────────────────────────────
+   2️⃣b A registered case (lead) for SEAL: everything the client saw, with its
+   case number and the links a person uses to record the follow-up
+───────────────────────────────────────────── */
+const STATUS_LABEL = {
+  contactado: "Marcar contactado",
+  calificado: "Lead calificado",
+  cotizado: "Cotización enviada",
+  cliente: "Ya es cliente",
+  descartado: "Descartar",
+  derivar: "Derivar (requiere validación)",
+};
+function fmtDate(ms) {
+  return new Date(ms).toLocaleString("es-GT", { timeZone: "America/Guatemala", dateStyle: "medium", timeStyle: "short" });
+}
+export function caseEmailHtml(lead, links) {
+  const c = lead.case || {};
+  const p = lead.contact || {};
+  const row = (label, value) =>
+    value || value === 0
+      ? `<tr><td style="padding:6px 10px;color:#64748b;vertical-align:top;white-space:nowrap">${label}</td><td style="padding:6px 10px"><b>${e(value)}</b></td></tr>`
+      : "";
+  const list = (title, items, color) =>
+    Array.isArray(items) && items.length
+      ? `<h3 style="margin:18px 0 6px;color:${color}">${title}</h3><ul style="margin:0;padding-left:18px">${items.map((x) => `<li style="margin:3px 0">${e(x)}</li>`).join("")}</ul>`
+      : "";
+  const chat = Array.isArray(c.chat) && c.chat.length
+    ? `<h3 style="margin:18px 0 6px;color:#0B3C5D">Lo que escribió en el chat</h3>${c.chat.map((x) => `<p style="margin:4px 0;padding:6px 10px;background:#f1f5f9;border-radius:6px">${e(x)}</p>`).join("")}`
+    : "";
+  const buttons = links
+    ? `<h3 style="margin:22px 0 8px;color:#0B3C5D">Seguimiento (lo registra una persona)</h3>
+       <p style="margin:0 0 8px;color:#64748b;font-size:13px">Cada botón abre una página para confirmar el cambio; nada cambia solo con abrir el correo.</p>
+       ${Object.entries(STATUS_LABEL).map(([s, label]) => `<a href="${e(links.act(s))}" style="display:inline-block;margin:3px 4px 3px 0;padding:7px 12px;border-radius:6px;background:${s === "descartado" ? "#94a3b8" : s === "derivar" ? "#f59e0b" : "#0B3C5D"};color:#fff;text-decoration:none;font-size:13px">${label}</a>`).join("")}
+       <p style="margin:14px 0 0;font-size:13px"><a href="${e(links.funnel)}">Ver el embudo (visitas → clientes)</a></p>`
+    : "";
+  return emailWrapper(
+    `Caso ${lead.id}`,
+    `
+    <h2 style="margin-top:0">📥 ${e(lead.requestType || "Solicitud")} — caso ${e(lead.id)}</h2>
+    <p style="margin:0 0 12px;color:#64748b">Recibido ${e(fmtDate(lead.createdAt))} · desde: ${e(lead.source || "—")}${lead.intent ? ` · intención: ${e(lead.intent)}` : ""}${lead.lang === "en" ? " · cliente en inglés" : ""}</p>
+    <table style="border-collapse:collapse;width:100%">
+      ${row("Nombre", p.name)}${row("Correo", p.email)}${row("Teléfono", p.phone)}${row("Empresa", p.company)}
+    </table>
+    <h3 style="margin:18px 0 6px;color:#0B3C5D">El caso</h3>
+    <table style="border-collapse:collapse;width:100%">
+      ${row("Producto", c.product)}${row("Descripción", c.description && c.description !== c.product ? c.description : "")}
+      ${row("Cantidad", c.quantity)}${row("Proveedor", c.supplierName)}${row("Enlace del proveedor", c.supplierUrl)}
+      ${row("Precio publicado", c.price)}${row("Costo total estimado", c.totalCostText)}${row("Presupuesto", c.budget)}
+      ${row("Destino", c.destination)}${row("Informe del cliente", c.caseRef)}
+    </table>
+    ${c.message ? `<h3 style="margin:18px 0 6px;color:#0B3C5D">Mensaje del cliente</h3><p style="margin:0;white-space:pre-line">${e(c.message)}</p>` : ""}
+    ${list("Supuestos usados en la estimación", c.assumptions, "#0369a1")}
+    ${list("Advertencias que vio el cliente", c.warnings, "#b45309")}
+    ${chat}
+    <p style="margin:18px 0 0;padding:10px;background:#fef3c7;border-radius:6px;font-size:13px">SEAL atiende primero este caso. Si conviene derivarlo a otra empresa del grupo (ImportaGuate, Courier.com.gt, DLZ o DLZ Foods), una persona lo valida: no es automático. Los datos del proveedor y la estimación vienen de lo publicado en la plataforma y no están verificados.</p>
+    ${buttons}
+  `,
+  );
+}
+
+export async function sendCaseToSeal(lead, links) {
+  const resend = getResendClient();
+  const c = lead.case || {};
+  const product = String(c.product || c.description || "").replace(/[\r\n]/g, " ").slice(0, 60);
+  const { data, error } = await resend.emails.send({
+    from: FROM_EMAIL,
+    to: adminEmails,
+    replyTo: lead.contact.email,
+    subject: `${lead.test ? "[PRUEBA] " : ""}Caso ${lead.id}: ${String(lead.requestType || "Solicitud").replace(/[\r\n]/g, " ")} — ${String(lead.contact.name).replace(/[\r\n]/g, " ")}${product ? ` (${product})` : ""}`,
+    html: caseEmailHtml(lead, links),
+  });
+  if (error) throw new Error(error.message);
+  return data;
+}
+
+/** Cases nobody has marked as contacted yet. */
+export async function sendFollowUpReminder(list, linksFor) {
+  const resend = getResendClient();
+  const rows = list
+    .map((l) => `<li style="margin:6px 0"><b>${e(l.id)}</b> — ${e(l.contact.name)} (${e(l.contact.email)}) · ${e(l.case.product || l.case.description || "")} · recibido ${e(fmtDate(l.createdAt))} · <a href="${e(linksFor(l).act("contactado"))}">marcar contactado</a></li>`)
+    .join("");
+  const { error } = await resend.emails.send({
+    from: FROM_EMAIL,
+    to: adminEmails,
+    subject: `Seguimiento pendiente: ${list.length} caso${list.length === 1 ? "" : "s"} sin contacto registrado`,
+    html: emailWrapper("Casos sin seguimiento", `<p>Estos casos llevan más de un día sin que nadie registre el contacto:</p><ul style="padding-left:18px">${rows}</ul>`),
+  });
+  if (error) throw new Error(error.message);
+}
+
+/* ─────────────────────────────────────────────
    3️⃣ Send Report To User
 ───────────────────────────────────────────── */
 export async function sendReportToUser({
@@ -216,5 +306,7 @@ export default {
   sendLeadNotification,
   sendSearchLead,
   sendQuoteRequest,
+  sendCaseToSeal,
+  sendFollowUpReminder,
   sendReportToUser,
 };
