@@ -83,8 +83,9 @@ router.post("/quote", async (req, res) => {
       destination: clean(b.destination, 60),
       message: clean(b.message, 2000),
       caseRef: clean(b.caseRef, 40),
-      assumptions: list(b.assumptions),
-      warnings: list(b.warnings),
+      // whole sentences: an assumption cut in half changes its meaning
+      assumptions: list(b.assumptions, 12, 1000),
+      warnings: list(b.warnings, 12, 1000),
       chat: list(b.chat, 8, 500),
     };
     if (!caseData.totalCostText && Number(b.totalCost) > 0) caseData.totalCostText = `US$${Math.round(Number(b.totalCost)).toLocaleString("en-US")}`;
