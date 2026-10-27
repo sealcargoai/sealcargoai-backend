@@ -102,8 +102,8 @@ router.post("/quote", async (req, res) => {
     const update = duplicate && lead.notified !== false && changes.length ? changes : null;
     if (!duplicate || lead.notified === false || update) {
       try {
-        await sendCaseToSeal(lead, linksFor(lead, baseUrl(req)), update);
-        markNotified(lead.id, true);
+        const sent = await sendCaseToSeal(lead, linksFor(lead, baseUrl(req)), update);
+        markNotified(lead.id, true, "", Date.now(), sent?.id);
         notified = true;
       } catch (err) {
         console.error("❌ case email failed:", lead.id, err.message);

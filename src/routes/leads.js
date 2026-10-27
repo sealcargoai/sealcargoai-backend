@@ -10,10 +10,17 @@ import { escapeHtml as e, clean } from "../middleware/security.js";
 import { sign, verifySigned } from "../services/quotaStore.js";
 import { getLead, updateLead, leadFunnel, dueForReminder, markReminded, GROUP_COMPANIES } from "../services/leadStore.js";
 import { recordEvent, eventTotals } from "../services/funnelStore.js";
-import { sendFollowUpReminder } from "../services/email.js";
+import { sendFollowUpReminder, emailDelivery } from "../services/email.js";
 
+// Links in SEAL's emails never take their host from the request alone (a forged Host
+// header must not put another site in SEAL's buttons): PUBLIC_API_URL, else a known host.
+const DEFAULT_PUBLIC_URL = "https://sealcargoai-backend-production.up.railway.app";
 export function baseUrl(req) {
-  return process.env.PUBLIC_API_URL || `${req.protocol}://${req.get("host")}`;
+  if (process.env.PUBLIC_API_URL) return process.env.PUBLIC_API_URL;
+  const host = String(req.get("host") || "").toLowerCase();
+  if (/^[a-z0-9-]+\.up\.railway\.app$/.test(host)) return `https://${host}`;
+  if (/^(?:localhost|127\.0\.0\.1)(?::\d{2,5})?$/.test(host)) return `${req.protocol}://${host}`;
+  return DEFAULT_PUBLIC_URL;
 }
 export const leadToken = (id) => sign(`lead:${id}`);
 export const funnelToken = () => sign("funnel");
@@ -40,6 +47,18 @@ const page = (title, body) => `<!doctype html><html lang="es"><head><meta charse
 
 const router = express.Router();
 router.use(express.urlencoded({ extended: false, limit: "20kb" }));
+// the case, follow-up and funnel pages carry signed links: not framed, not cached,
+// no referrer, no scripts
+router.use("/leads", (_req, res, next) => {
+  res.set({
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "X-Content-Type-Options": "nosniff",
+    "Cache-Control": "no-store",
+  });
+  next();
+});
 
 // ── anonymous funnel events ────────────────────────────────────────────────
 router.post("/events", (req, res) => {
@@ -88,7 +107,7 @@ router.post("/leads/act/:id", (req, res) => {
       : updateLead(l.id, { status: s, by: clean(b.by, 120), note: clean(b.note, 500) });
   if (r.error) {
     const msg = r.error === "validation_required" ? "Falta el nombre de la persona que valida la derivación." : r.error === "unknown_company" ? "Elige una empresa del grupo." : "No se pudo registrar.";
-    return res.status(400).send(page("Error", `<h1 class="err">${e(msg)}</h1><p><a href="javascript:history.back()">Volver</a></p>`));
+    return res.status(400).send(page("Error", `<h1 class="err">${e(msg)}</h1><p><a href="?s=${encodeURIComponent(s)}&t=${encodeURIComponent(clean(b.t, 64))}">Volver</a></p>`));
   }
   res.send(page("Registrado", `<h1 class="ok">Registrado: ${e(LABEL[s])}</h1>${caseSummary(r.lead)}`));
 });
@@ -103,7 +122,28 @@ const CLIENT_STATUS = {
   cliente: "En atención",
   descartado: "Cerrado",
 };
-router.get("/leads/case/:id", (req, res) => {
+// delivery of the email to SEAL, as the email service reports it (cached a minute)
+const DELIVERY = {
+  delivered: "Entregado al correo de SEAL (confirmado por el servicio de correo)",
+  sent: "Enviado a SEAL (en tránsito)",
+  delivery_delayed: "Entrega demorada: si es urgente, escribe al WhatsApp de SEAL",
+  bounced: "No llegó al correo de SEAL: escribe al WhatsApp de SEAL con tu número de caso",
+  complained: "Entregado al correo de SEAL",
+  opened: "Entregado y abierto en el correo de SEAL",
+  clicked: "Entregado y abierto en el correo de SEAL",
+};
+const deliveryCache = new Map(); // email id -> { at, event }
+async function deliveryOf(l) {
+  const id = (l.emailIds || []).at(-1);
+  if (!id) return "";
+  const hit = deliveryCache.get(id);
+  if (hit && Date.now() - hit.at < 60000) return hit.event;
+  const event = await emailDelivery(id);
+  deliveryCache.set(id, { at: Date.now(), event });
+  if (deliveryCache.size > 500) deliveryCache.delete(deliveryCache.keys().next().value);
+  return event;
+}
+router.get("/leads/case/:id", async (req, res) => {
   const l = getLead(String(req.params.id));
   if (!l || !verifySigned(`case:${l.id}`, clean(req.query.t, 64))) return res.status(404).send(page("No encontrado", "<h1>Enlace no válido</h1>"));
   const c = l.case || {};
@@ -118,19 +158,26 @@ router.get("/leads/case/:id", (req, res) => {
     repeats: l.repeats || 0,
     case: c,
   };
+  const event = l.notified ? await deliveryOf(l) : "";
+  data.notification = {
+    sent: !!l.notified,
+    delivery: event,
+    deliveryText: !l.notified ? (l.notified === false ? "El aviso por correo falló; el caso quedó registrado y SEAL lo ve en su registro" : "") : DELIVERY[event] || "Enviado a SEAL",
+  };
   if (req.query.format === "json") return res.json(data);
   res.send(
     page(
       `Caso ${l.id}`,
       `<h1>Caso ${e(l.id)}</h1>
       <div class="card"><b>${e(data.statusText)}</b><br><span class="muted">Recibido: ${e(new Date(l.createdAt).toLocaleString("es-GT", { timeZone: "America/Guatemala" }))}${l.repeats ? ` · lo enviaste ${l.repeats + 1} veces y quedó como un solo caso` : ""}</span></div>
+      ${data.notification.deliveryText ? `<div class="card"><span class="muted">Aviso a SEAL:</span> ${e(data.notification.deliveryText)}</div>` : ""}
       <div class="card"><b>Lo que recibió SEAL</b><table>
         ${row("Producto", c.product)}${row("Cantidad", c.quantity)}${row("Proveedor", c.supplierName)}
         ${c.priceSource === "usuario" ? row("Precio indicado por el usuario", c.price) + row("Precio publicado", c.publishedPrice) : row("Precio publicado", c.price)}
         ${row("Costo total estimado", c.totalCostText)}${row("Tu mensaje", c.message)}
         ${list("Supuestos de la estimación", c.assumptions)}${list("Advertencias", c.warnings)}${list("Lo que escribiste en el chat", c.chat)}
       </table></div>
-      <p class="muted">Es una estimación preliminar con información publicada por la plataforma; no es una cotización ni una verificación del proveedor. Para algo urgente escribe al WhatsApp de SEAL +502 5996 4664 con tu número de caso.</p>`,
+      <p class="muted">${c.supplierName || c.price || c.totalCostText ? "Es una estimación preliminar con información publicada por la plataforma; no es una cotización ni una verificación del proveedor. " : ""}Para algo urgente escribe al WhatsApp de SEAL +502 5996 4664 con tu número de caso.</p>`,
     ),
   );
 });
