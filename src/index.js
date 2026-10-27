@@ -7,8 +7,11 @@ import suppliersRouter from "./routes/suppliers.js";
 import aiRouter from "./routes/ai.js";
 import emailRoutes from "./routes/email.js";
 import ratesRouter from "./routes/rates.js";
+import leadsRouter, { learnBase } from "./routes/leads.js";
 import { corsOrigin, rateLimit } from "./middleware/security.js";
 import { isQa, flushQuota } from "./services/quotaStore.js";
+import { flushLeads } from "./services/leadStore.js";
+import { flushFunnel } from "./services/funnelStore.js";
 
 
 const app = express();
@@ -37,12 +40,19 @@ const searchLimiter = rateLimit({
 });
 const aiLimiter     = rateLimit({ windowMs: 10 * 60 * 1000, max: 40 });
 const emailLimiter  = rateLimit({ windowMs: 60 * 60 * 1000, max: 10 });
+const eventLimiter  = rateLimit({ windowMs: 60 * 60 * 1000, max: 120 });
+const followLimiter = rateLimit({ windowMs: 10 * 60 * 1000, max: 60 });
+
+app.use(learnBase);
 
 app.use("/api/suppliers/search", searchLimiter);
 app.use("/api/suppliers", suppliersRouter);
 app.use("/api/ai", aiLimiter, aiRouter);
 app.use("/api/email", emailLimiter, emailRoutes);
 app.use("/api/rates", ratesRouter);
+app.use("/api/events", eventLimiter);
+app.use("/api/leads", followLimiter);
+app.use("/api", leadsRouter);
 
 
 // Root route — no more "Cannot GET /"
@@ -80,6 +90,8 @@ app.use((err, _req, res, _next) => {
 for (const sig of ["SIGTERM", "SIGINT"]) {
   process.on(sig, () => {
     flushQuota();
+    flushLeads();
+    flushFunnel();
     process.exit(0);
   });
 }
