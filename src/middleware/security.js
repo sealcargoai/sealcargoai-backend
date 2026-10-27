@@ -1,3 +1,4 @@
+import net from "node:net";
 // ── Security helpers (no external dependencies) ──────────────────────────────
 
 // Origins allowed to call the API. Override with ALLOWED_ORIGINS (comma separated).
@@ -29,11 +30,28 @@ export function corsOrigin(origin, callback) {
 // (values sent by the client never reach the app), while the rightmost
 // X-Forwarded-For entry (what req.ip gives with trust proxy 1) can be an
 // internal hop shared by many users. So: X-Real-IP first, then req.ip.
-const IP_RE = /^[0-9a-f:.]{3,45}$/i;
+// TRUST_X_REAL_IP=0 turns the header off for deployments without such an edge.
+// IPv6 addresses are grouped by /64 (one user can rotate inside their own block).
+const TRUST_X_REAL_IP = process.env.TRUST_X_REAL_IP !== "0";
+function ipKey(ip) {
+  if (net.isIPv6(ip) && !/^::ffff:/i.test(ip)) {
+    const full = ip.includes("::")
+      ? (() => {
+          const [a, b] = ip.split("::");
+          const left = a ? a.split(":") : [];
+          const right = b ? b.split(":") : [];
+          return [...left, ...Array(8 - left.length - right.length).fill("0"), ...right];
+        })()
+      : ip.split(":");
+    return `${full.slice(0, 4).map((x) => x.toLowerCase()).join(":")}::/64`;
+  }
+  return ip.replace(/^::ffff:/i, "");
+}
 export function clientIp(req) {
   const real = String(req.headers?.["x-real-ip"] || "").trim();
-  if (IP_RE.test(real)) return real;
-  return req.ip || req.socket?.remoteAddress || "unknown";
+  if (TRUST_X_REAL_IP && net.isIP(real)) return ipKey(real);
+  const ip = req.ip || req.socket?.remoteAddress || "";
+  return net.isIP(ip) ? ipKey(ip) : "unknown";
 }
 
 // What the server sees for the caller's own connection (no one else's data).
