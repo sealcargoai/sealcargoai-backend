@@ -7,6 +7,7 @@
 //   saved to DATA_DIR/quota.json and survive deploys/restarts.
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 
 const SEARCH_LIMIT = parseInt(process.env.SEARCH_LIMIT) || 3;
 const IP_SEARCH_LIMIT = parseInt(process.env.IP_SEARCH_LIMIT) || 6;
@@ -137,6 +138,40 @@ export function reserveSearch(email, ip) {
 export function hasSearched(email) {
   const at = searched.get(emailKey(email));
   return !!at && Date.now() - at < 7 * 24 * 60 * 60 * 1000;
+}
+
+// ── Report token: proof that this browser ran the search for this email ─────
+// Knowing someone's email is not enough to send a "SEAL report" in their name: the
+// search response carries a signed token and /api/email/report requires it.
+// The secret comes from REPORT_SECRET, else is kept in DATA_DIR (survives deploys),
+// else lives only in memory (tokens then expire with a restart).
+let reportSecret = process.env.REPORT_SECRET || "";
+if (!reportSecret) {
+  const dir = process.env.DATA_DIR || "";
+  const file = dir ? path.join(dir, "report-secret") : "";
+  try {
+    if (file && fs.existsSync(file)) reportSecret = fs.readFileSync(file, "utf8").trim();
+  } catch {
+    /* unreadable: a new one below */
+  }
+  if (!reportSecret) {
+    reportSecret = crypto.randomBytes(32).toString("hex");
+    try {
+      if (file) fs.writeFileSync(file, reportSecret, { mode: 0o600 });
+    } catch {
+      /* no volume: in memory only */
+    }
+  }
+}
+export function reportToken(email) {
+  const key = emailKey(email);
+  if (!key) return "";
+  return crypto.createHmac("sha256", reportSecret).update(`report:${key}`).digest("base64url").slice(0, 32);
+}
+export function verifyReportToken(email, token) {
+  const want = reportToken(email);
+  if (!want || typeof token !== "string" || token.length !== want.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(want), Buffer.from(token));
 }
 
 // ── Housekeeping: expired IP windows and old "searched" marks are dropped ──

@@ -152,18 +152,32 @@ export async function sendReportToUser({
   totalCost,
   totalCostText,
   requesterEmail,
+  lang = "es",
 }) {
   const resend = getResendClient();
+  const en = lang === "en";
   const attachments = pdfBuffer
-    ? [{ filename: `SEAL_Informe_${Date.now()}.pdf`, content: pdfBuffer }]
+    ? [{ filename: `SEAL_${en ? "Report" : "Informe"}_${Date.now()}.pdf`, content: pdfBuffer }]
     : [];
+  const other = requesterEmail && requesterEmail.toLowerCase() !== String(recipientEmail).toLowerCase();
+  const total = e(totalCostText || "US$" + Number(totalCost || 0).toLocaleString("en-US"));
 
-  const content = `
+  // the client's language, as in the PDF they chose
+  const content = en
+    ? `
+    <h2>📄 Your import report</h2>
+    <p>Hello ${e(recipientName || "")}</p>
+    ${supplierName ? `<p>Supplier: ${e(supplierName)}</p>` : ""}
+    <p>Estimated total cost: ${total}</p>
+    ${other ? `<p>Sent at the request of: ${e(requesterEmail)}</p>` : ""}
+    <p style="color:#64748b;font-size:12px">This is a preliminary estimate based on information published by the platform; it is not a quote nor a verification of the supplier.</p>
+  `
+    : `
     <h2>📄 Su informe de importación</h2>
     <p>Hola ${e(recipientName || "")}</p>
-    <p>Proveedor: ${e(supplierName)}</p>
-    <p>Costo total estimado: ${e(totalCostText || "US$" + Number(totalCost || 0).toLocaleString("en-US"))}</p>
-    ${requesterEmail && requesterEmail.toLowerCase() !== String(recipientEmail).toLowerCase() ? `<p>Enviado a solicitud de: ${e(requesterEmail)}</p>` : ""}
+    ${supplierName ? `<p>Proveedor: ${e(supplierName)}</p>` : ""}
+    <p>Costo total estimado: ${total}</p>
+    ${other ? `<p>Enviado a solicitud de: ${e(requesterEmail)}</p>` : ""}
     <p style="color:#64748b;font-size:12px">Es una estimación preliminar con información publicada por la plataforma; no es una cotización ni una verificación del proveedor.</p>
   `;
 
@@ -171,8 +185,8 @@ export async function sendReportToUser({
     from: FROM_EMAIL,
     to: recipientEmail,
     bcc: adminEmails,
-    subject: `Su informe SEAL - ${String(supplierName).replace(/[\r\n]/g, " ")}`,
-    html: emailWrapper("Informe de análisis de importación", content),
+    subject: `${en ? "Your SEAL report" : "Su informe SEAL"}${supplierName ? ` - ${String(supplierName).replace(/[\r\n]/g, " ")}` : ""}`,
+    html: emailWrapper(en ? "Import analysis report" : "Informe de análisis de importación", content),
     attachments,
   });
 

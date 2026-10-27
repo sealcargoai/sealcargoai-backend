@@ -183,8 +183,11 @@ function getRejectReason(s, { trustScore, quantity }) {
   if (s.rating && (s.reviews || 0) >= FILTERS.minReviewsForRating && s.rating < FILTERS.minRating) {
     return `Calificación ${s.rating.toFixed(1)} por debajo de ${FILTERS.minRating.toFixed(1)}`;
   }
-  if (quantity > 0 && s.moq > quantity) {
-    return `Pedido mínimo de ${s.moq.toLocaleString("en-US")} unidades, mayor a tu cantidad`;
+  // The minimum is in the listing's sale unit and the quantity in the client's own
+  // (pairs, boxes, dozens…), so only an evident gap is a reason to leave a listing
+  // out; the cost page converts both and says when the order is below the minimum.
+  if (quantity > 0 && s.moq >= quantity * 100) {
+    return `Pedido mínimo de ${s.moq.toLocaleString("en-US")} unidades, muy por encima de tu cantidad`;
   }
   if (trustScore < FILTERS.minTrust) {
     return `Índice referencial ${trustScore}/100, debajo del mínimo de ${FILTERS.minTrust}`;
