@@ -108,6 +108,28 @@ test("tests and QA sessions don't inflate the commercial funnel", async () => {
   assert.deepEqual(j.recipients, { commercial: 1, devCopies: 2, qaInbox: 0, devGetsReal: false });
 });
 
+test("a controlled test with customer data uses the customer routing, then is excluded from the metrics", async () => {
+  const j = await (await post("/api/email/quote", { name: "Control interno SEAL", email: "administracion@seal.com.gt", product: "Control", message: "PRUEBA CONTROLADA — NO ATENDER COMERCIALMENTE" })).json();
+  assert.equal(j.test, false); // the message doesn't change the routing
+  const m = mails().at(-1);
+  assert.deepEqual(m.to, ["ventas@seal.com.gt"]);
+  assert.doesNotMatch(m.subject, /PRUEBA\]/);
+  const html = m.html;
+  const f = new URL(html.match(/href="([^"]+funnel[^"]+)"/)[1].replace(/&amp;/g, "&"));
+  const before = (await (await fetch(BASE + f.pathname + f.search + "&format=json")).json()).stages["Solicitudes recibidas (registradas con número)"];
+  const u = new URL(html.match(/href="([^"]+s=excluir[^"]+)"/)[1].replace(/&amp;/g, "&"));
+  const t = u.searchParams.get("t");
+  assert.match(await (await fetch(BASE + u.pathname + u.search)).text(), /Motivo \(obligatorio\)/);
+  const form = (body) => fetch(BASE + u.pathname, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body });
+  assert.equal((await form(`s=excluir&t=${t}&by=Control`)).status, 400); // no reason
+  assert.equal((await form(`s=excluir&t=${t}&note=x`)).status, 400); // no name
+  const ok = await form(`s=excluir&t=${t}&by=${encodeURIComponent("Víctor López")}&note=${encodeURIComponent("Prueba controlada de destinatarios")}`);
+  assert.equal(ok.status, 200);
+  assert.match(await ok.text(), /excluido de las métricas/);
+  const after = (await (await fetch(BASE + f.pathname + f.search + "&format=json")).json()).stages["Solicitudes recibidas (registradas con número)"];
+  assert.equal(after, before - 1);
+});
+
 test("explicit authorization and a QA inbox change the routing as configured", async () => {
   await stop(srv);
   srv = await start({ DEV_COPIES_REAL_LEADS: "1", LEADS_CC: "gerencia@seal.com.gt", QA_LEADS_EMAIL: "qa@seal.com.gt" });
