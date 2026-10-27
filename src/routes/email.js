@@ -6,7 +6,7 @@ import {
   testTag,
 } from "../services/email.js";
 import { registerLead, markNotified, leadsPersistent } from "../services/leadStore.js";
-import { linksFor, baseUrl } from "./leads.js";
+import { linksFor, baseUrl, caseLink } from "./leads.js";
 import { isEmail, clean } from "../middleware/security.js";
 import { hasSearched, emailKey, verifyReportToken } from "../services/quotaStore.js";
 
@@ -73,6 +73,9 @@ router.post("/quote", async (req, res) => {
       supplierName: clean(b.supplierName, 200),
       supplierUrl: clean(b.supplierUrl, 500),
       price: clean(b.price, 80),
+      // the price used: from the listing, or typed by the client
+      priceSource: b.priceSource === "usuario" ? "usuario" : b.price ? "publicado" : "",
+      publishedPrice: clean(b.publishedPrice, 80),
       totalCostText: clean(b.totalCostText, 80),
       budget: clean(b.budget, 40),
       destination: clean(b.destination, 60),
@@ -84,7 +87,7 @@ router.post("/quote", async (req, res) => {
     };
     if (!caseData.totalCostText && Number(b.totalCost) > 0) caseData.totalCostText = `US$${Math.round(Number(b.totalCost)).toLocaleString("en-US")}`;
     for (const k of Object.keys(caseData)) if (caseData[k] === "") delete caseData[k];
-    const { lead, duplicate } = registerLead({
+    const { lead, duplicate, changes } = registerLead({
       contact,
       case: caseData,
       source: clean(b.source, 40),
@@ -93,11 +96,13 @@ router.post("/quote", async (req, res) => {
       lang: b.lang,
       test: !!testTag(contact.name, contact.email),
     });
-    // a repeat of an open case is not emailed again (unless the first email failed)
+    // an identical repeat of an open case is not emailed again (unless the first email
+    // failed); a repeat with new information goes to SEAL as an update of the same case
     let notified = lead.notified;
-    if (!duplicate || lead.notified === false) {
+    const update = duplicate && lead.notified !== false && changes.length ? changes : null;
+    if (!duplicate || lead.notified === false || update) {
       try {
-        await sendCaseToSeal(lead, linksFor(lead, baseUrl(req)));
+        await sendCaseToSeal(lead, linksFor(lead, baseUrl(req)), update);
         markNotified(lead.id, true);
         notified = true;
       } catch (err) {
@@ -108,7 +113,8 @@ router.post("/quote", async (req, res) => {
         if (!leadsPersistent) return res.status(500).json({ error: "Could not send email" });
       }
     }
-    res.json({ success: true, id: lead.id, duplicate, notified: notified !== false });
+    // the client can see what SEAL received and the case status (signed link)
+    res.json({ success: true, id: lead.id, duplicate, notified: notified !== false, caseUrl: caseLink(lead, baseUrl(req)) });
   } catch (err) {
     console.error("❌ /email/quote:", err.message);
     res.status(500).json({ error: "Could not send email" });

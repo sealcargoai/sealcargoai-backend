@@ -17,6 +17,8 @@ export function baseUrl(req) {
 }
 export const leadToken = (id) => sign(`lead:${id}`);
 export const funnelToken = () => sign("funnel");
+export const caseToken = (id) => sign(`case:${id}`);
+export const caseLink = (lead, base) => `${base}/api/leads/case/${encodeURIComponent(lead.id)}?t=${encodeURIComponent(caseToken(lead.id))}`;
 export function linksFor(lead, base) {
   const t = leadToken(lead.id);
   return {
@@ -92,6 +94,47 @@ router.post("/leads/act/:id", (req, res) => {
 });
 
 // ── funnel ───────────────────────────────────────────────────────────────────
+// ── the client's view of their case: what SEAL received and where it stands ──
+const CLIENT_STATUS = {
+  recibido: "Recibido por SEAL — pendiente de contacto",
+  contactado: "Un ejecutivo de SEAL ya te contactó",
+  calificado: "En revisión por SEAL",
+  cotizado: "Cotización enviada",
+  cliente: "En atención",
+  descartado: "Cerrado",
+};
+router.get("/leads/case/:id", (req, res) => {
+  const l = getLead(String(req.params.id));
+  if (!l || !verifySigned(`case:${l.id}`, clean(req.query.t, 64))) return res.status(404).send(page("No encontrado", "<h1>Enlace no válido</h1>"));
+  const c = l.case || {};
+  const row = (k, v) => (v ? `<tr><td class="muted">${e(k)}</td><td>${e(v)}</td></tr>` : "");
+  const list = (k, v) => (Array.isArray(v) && v.length ? `<tr><td class="muted">${e(k)}</td><td><ul>${v.map((x) => `<li>${e(x)}</li>`).join("")}</ul></td></tr>` : "");
+  const data = {
+    id: l.id,
+    status: l.status,
+    statusText: CLIENT_STATUS[l.status] || l.status,
+    receivedAt: new Date(l.createdAt).toISOString(),
+    updatedAt: new Date(l.updatedAt).toISOString(),
+    repeats: l.repeats || 0,
+    case: c,
+  };
+  if (req.query.format === "json") return res.json(data);
+  res.send(
+    page(
+      `Caso ${l.id}`,
+      `<h1>Caso ${e(l.id)}</h1>
+      <div class="card"><b>${e(data.statusText)}</b><br><span class="muted">Recibido: ${e(new Date(l.createdAt).toLocaleString("es-GT", { timeZone: "America/Guatemala" }))}${l.repeats ? ` · lo enviaste ${l.repeats + 1} veces y quedó como un solo caso` : ""}</span></div>
+      <div class="card"><b>Lo que recibió SEAL</b><table>
+        ${row("Producto", c.product)}${row("Cantidad", c.quantity)}${row("Proveedor", c.supplierName)}
+        ${c.priceSource === "usuario" ? row("Precio indicado por el usuario", c.price) + row("Precio publicado", c.publishedPrice) : row("Precio publicado", c.price)}
+        ${row("Costo total estimado", c.totalCostText)}${row("Tu mensaje", c.message)}
+        ${list("Supuestos de la estimación", c.assumptions)}${list("Advertencias", c.warnings)}${list("Lo que escribiste en el chat", c.chat)}
+      </table></div>
+      <p class="muted">Es una estimación preliminar con información publicada por la plataforma; no es una cotización ni una verificación del proveedor. Para algo urgente escribe al WhatsApp de SEAL +502 5996 4664 con tu número de caso.</p>`,
+    ),
+  );
+});
+
 router.get("/leads/funnel", (req, res) => {
   const admin = process.env.ADMIN_TOKEN && req.get("x-admin-token") === process.env.ADMIN_TOKEN;
   if (!admin && !verifySigned("funnel", clean(req.query.t, 64))) return res.status(404).send(page("No encontrado", "<h1>Enlace no válido</h1>"));
