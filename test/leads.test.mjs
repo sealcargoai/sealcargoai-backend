@@ -201,3 +201,10 @@ test("the same case with new information: same number, SEAL gets one update emai
   await post("/api/email/quote", { ...base, message: "Cambió el precio", price: "US$2.40 por pieza", priceSource: "usuario" }, "10.0.0.23");
   assert.equal(mails().length, n + 1);
 });
+
+test("long assumptions and warnings arrive whole (not cut at 300 characters)", async () => {
+  const long = "Supuesto largo " + "x".repeat(400) + " — fin del supuesto.";
+  await post("/api/email/quote", { ...CASE, product: "Largo", productDescription: "Largo", supplierName: "", supplierUrl: "", assumptions: [long], warnings: [long] }, "10.0.0.40");
+  const html = mails().at(-1).html;
+  assert.equal(html.split("fin del supuesto.").length - 1, 2);
+});
