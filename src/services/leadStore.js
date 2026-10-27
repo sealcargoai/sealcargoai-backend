@@ -122,13 +122,23 @@ export function markNotified(id, ok, error = "", now = Date.now(), emailId = "",
  * A person changes the status. A transfer to a group company needs the name of
  * the person who validated it (never automatic). Returns { lead } or { error }.
  */
-export function updateLead(id, { status, note = "", by = "", transferTo = "", validatedBy = "" }, now = Date.now()) {
+export function updateLead(id, { status, note = "", by = "", transferTo = "", validatedBy = "", exclude = false }, now = Date.now()) {
   const l = getLead(id);
   if (!l) return { error: "not_found" };
   // every change records who made it (a person) and when
   const who = String(by || validatedBy || "").trim().slice(0, 120);
   if (!who) return { error: "who_required" };
   const entry = { at: now, action: "estado", note: String(note).slice(0, 500), by: who };
+  // a controlled test (or spam) that reached the customer routing: kept in the
+  // registry, out of the commercial metrics; needs who and why
+  if (exclude) {
+    if (!String(note).trim()) return { error: "reason_required" };
+    l.excluded = { by: who, at: now, note: String(note).slice(0, 500) };
+    l.updatedAt = now;
+    l.history.push({ ...entry, action: "excluido_de_metricas" });
+    scheduleSave();
+    return { lead: l };
+  }
   if (transferTo) {
     if (!GROUP_COMPANIES.includes(transferTo)) return { error: "unknown_company" };
     if (!String(validatedBy).trim()) return { error: "validation_required" };
@@ -153,7 +163,7 @@ export function updateLead(id, { status, note = "", by = "", transferTo = "", va
 
 /** Cases still "recibido" (nobody marked contact) after `ageMs`, not reminded yet. */
 export function dueForReminder(ageMs, now = Date.now()) {
-  return leads.filter((l) => l.status === "recibido" && !l.test && !l.remindedAt && now - l.createdAt >= ageMs);
+  return leads.filter((l) => l.status === "recibido" && !l.test && !l.excluded && !l.remindedAt && now - l.createdAt >= ageMs);
 }
 export function markReminded(id, now = Date.now()) {
   const l = getLead(id);
@@ -164,7 +174,7 @@ export function markReminded(id, now = Date.now()) {
 }
 
 export function listLeads({ status = "", sinceMs = 0, includeTest = false } = {}) {
-  return leads.filter((l) => (!status || l.status === status) && l.createdAt >= sinceMs && (includeTest || !l.test));
+  return leads.filter((l) => (!status || l.status === status) && l.createdAt >= sinceMs && (includeTest || (!l.test && !l.excluded)));
 }
 
 /** Requests, then each later stage counted as reached (a client was also quoted). */
