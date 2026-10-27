@@ -8,7 +8,7 @@ import aiRouter from "./routes/ai.js";
 import emailRoutes from "./routes/email.js";
 import ratesRouter from "./routes/rates.js";
 import { corsOrigin, rateLimit } from "./middleware/security.js";
-import { isQa } from "./services/quotaStore.js";
+import { isQa, flushQuota } from "./services/quotaStore.js";
 
 
 const app = express();
@@ -24,8 +24,9 @@ app.use(cors({
   allowedHeaders: ["Content-Type"],
 }));
 
-// 5 MB so the PDF report (base64) fits; default is 100 KB
-app.use(express.json({ limit: "5mb" }));
+// 5 MB only where the PDF report (base64) travels; everything else stays small
+app.use("/api/email/report", express.json({ limit: "5mb" }));
+app.use(express.json({ limit: "200kb" }));
 
 // Rate limits per IP
 // QA / test accounts (QA_EMAILS) are not rate limited either
@@ -62,23 +63,26 @@ app.get("/health", (_req, res) => {
     status:          "ok",
     message:         "SealCargo Backend is running!",
     timestamp:       new Date().toISOString(),
-    environment:     process.env.NODE_ENV,
-    alibabaEnabled:  !!process.env.ALIBABA_APP_KEY,
-    grokEnabled:     !!process.env.GROK_API_KEY &&
-                     process.env.GROK_API_KEY !== "your_grok_api_key_here",
-    rapidApiEnabled: !!process.env.RAPIDAPI_KEY &&
-                     process.env.RAPIDAPI_KEY !== "your_rapidapi_key_here",
   });
 });
 
 // Bad or oversized JSON and unexpected errors answer in JSON, without stack traces
 app.use((err, _req, res, _next) => {
-  const status = err?.type === "entity.too.large" ? 413 : err instanceof SyntaxError || err?.type === "entity.parse.failed" ? 400 : 500;
+  // client errors from the body parser (bad JSON, bad encoding, too large) keep their 4xx
+  const status = err?.type === "entity.too.large" ? 413 : err instanceof SyntaxError || err?.type === "entity.parse.failed" ? 400 : Number(err?.status) >= 400 && Number(err?.status) < 500 ? Number(err.status) : 500;
   if (status === 500) console.error("❌ Unhandled error:", err?.message);
   res.status(status).json({
     error: status === 413 ? "Request too large" : status === 400 ? "Invalid JSON body" : "Internal error",
   });
 });
+
+// a deploy stops the process: save the last counted searches first
+for (const sig of ["SIGTERM", "SIGINT"]) {
+  process.on(sig, () => {
+    flushQuota();
+    process.exit(0);
+  });
+}
 
 app.listen(PORT, () => {
   console.log(`\n✅ SealCargo Backend running at http://localhost:${PORT}`);
