@@ -21,7 +21,7 @@ test("one reminder per unattended case, none for attended or test cases", async 
   const b = registerLead({ contact: { name: "Eva", email: "eva@empresa.gt" }, case: { product: "Sillas" }, source: "chat" }, t0).lead;
   registerLead({ contact: { name: "Prueba", email: "qa@example.com" }, case: { product: "X" }, test: true }, t0);
   registerLead({ contact: { name: "Nuevo", email: "n@empresa.gt" }, case: { product: "Y" } }); // too recent
-  updateLead(b.id, { status: "contactado" });
+  updateLead(b.id, { status: "contactado", by: "Ventas" });
   assert.equal(await remindPending("https://api.example"), 1);
   const mail = JSON.parse(fs.readFileSync(process.env.MAIL_LOG, "utf8").trim());
   assert.match(mail.subject, /1 caso sin contacto/);

@@ -113,7 +113,7 @@ test("status links: opening changes nothing, the button records it; a bad token 
   assert.equal(val.status, 200);
   assert.match(await val.text(), /DLZ \(validó Gerencia\)/);
   // cotizado then cliente
-  for (const s of ["cotizado", "cliente"]) await fetch(BASE + url.pathname, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: `s=${s}&t=${t}` });
+  for (const s of ["cotizado", "cliente"]) await fetch(BASE + url.pathname, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: `s=${s}&t=${t}&by=Ventas` });
 });
 
 test("funnel: events once per browser and day; requests and later stages from the registry", async () => {
