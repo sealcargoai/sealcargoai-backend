@@ -164,7 +164,7 @@ test("test records are flagged and kept out of the funnel", async () => {
 });
 
 test("a price typed by the user is labeled as such; the client's case page shows what SEAL received and its status", async () => {
-  const r = await post("/api/email/quote", { ...CASE, product: "Bolsas", productDescription: "Bolsas", supplierName: "", supplierUrl: "", price: "US$0.05 / unidad", priceSource: "usuario", publishedPrice: "US$0.04 / unidad" }, "10.0.0.20");
+  const r = await post("/api/email/quote", { ...CASE, product: "Bolsas", productDescription: "Bolsas", supplierName: "", supplierUrl: "", price: "US$0.05 / unidad", priceSource: "usuario", publishedPrice: "US$0.04 / unidad", budget: "US$5,000" }, "10.0.0.20");
   const j = await r.json();
   const m = mails().at(-1);
   assert.match(m.html, /Precio indicado por el usuario<\/td><td[^>]*><b>US\$0\.05/);
@@ -175,6 +175,9 @@ test("a price typed by the user is labeled as such; the client's case page shows
   assert.match(page, /Recibido por SEAL — pendiente de contacto/);
   assert.match(page, /Aviso a SEAL:<\/span> Entregado al correo de SEAL \(confirmado por el servicio de correo\)/);
   assert.match(page, /Precio indicado por el usuario/);
+  // the purchase budget the client set (form or chat) is on the case page, as in the email
+  assert.match(page, /Presupuesto de compra<\/td><td[^>]*>(?:<b>)?US\$5,000/);
+  assert.match(m.html, /Presupuesto<\/td><td[^>]*><b>US\$5,000/);
   assert.match(page, /Ya tengo proforma/);
   const data = await (await fetch(BASE + u.pathname + u.search + "&format=json")).json();
   assert.equal(data.case.priceSource, "usuario");
