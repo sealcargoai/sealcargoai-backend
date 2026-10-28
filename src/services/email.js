@@ -221,7 +221,7 @@ export function caseEmailHtml(lead, links, update = null) {
     <table style="border-collapse:collapse;width:100%">
       ${row("Producto", c.product)}${row("Descripción", c.description && c.description !== c.product ? c.description : "")}
       ${row("Cantidad", c.quantity)}${row("Proveedor", c.supplierName)}${row("Enlace del proveedor", c.supplierUrl)}
-      ${c.priceSource === "usuario" ? `${row("Precio indicado por el usuario", c.price)}${row("Precio publicado", c.publishedPrice)}` : row("Precio publicado", c.price)}${row("Costo total estimado", c.totalCostText)}${row("Presupuesto", c.budget)}
+      ${c.priceSource === "usuario" ? `${row("Precio indicado por el usuario", c.price)}${row("Precio publicado", c.publishedPrice)}` : (c.publishedPrice && c.publishedPrice !== c.price ? `${row("Precio usado en la estimación", c.price)}${row("Precio publicado", c.publishedPrice)}` : row("Precio publicado", c.price))}${row("Costo total estimado", c.totalCostText)}${row("Presupuesto", c.budget)}
       ${row("Destino", c.destination)}${row("Informe del cliente", c.caseRef)}
     </table>
     ${c.message ? `<h3 style="margin:18px 0 6px;color:#0B3C5D">Mensaje del cliente</h3><p style="margin:0;white-space:pre-line">${e(c.message)}</p>` : ""}
