@@ -246,7 +246,9 @@ export function requestLabel(requestType) {
 }
 export function caseSubject(lead, update = null) {
   const c = lead.case || {};
-  const product = String(c.product || c.description || "").replace(/[\r\n]/g, " ").slice(0, 60);
+  // the subject carries the product cut at a whole word ("…para bebidas…", never "para be")
+  const full = String(c.product || c.description || "").replace(/[\r\n]/g, " ").trim();
+  const product = full.length <= 60 ? full : `${full.slice(0, 61).replace(/\s+\S*$/, "").replace(/[,;:.\s]+$/, "")}…`;
   const estimate = c.totalCostText ? " · incluye estimación preliminar (no es cotización)" : "";
   return `${lead.test ? "[PRUEBA] " : ""}${update ? "Actualización · " : ""}Caso ${lead.id} · Solicitud recibida: ${requestLabel(lead.requestType)} — ${String(lead.contact.name).replace(/[\r\n]/g, " ")}${product ? ` (${product})` : ""}${estimate}`;
 }
