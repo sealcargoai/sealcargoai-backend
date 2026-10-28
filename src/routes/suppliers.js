@@ -228,8 +228,11 @@ router.post("/search", async (req, res) => {
       });
     }
 
-    // Only searches that showed options use a free search
-    if (result.topSuppliers?.length > 0) {
+    // Only searches that showed options use a free search; a client that already left
+    // (closed the page, started another case) never saw them: it costs nothing. The
+    // result stays cached, so asking again is answered at once.
+    const clientGone = req.socket?.destroyed || res.writableEnded || req.aborted;
+    if (result.topSuppliers?.length > 0 && !clientGone) {
       ticket.commit();
       seen.set(`${userEmail || ip}|${cacheKey}`, Date.now());
     }

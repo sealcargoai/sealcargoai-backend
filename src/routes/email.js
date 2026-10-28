@@ -69,7 +69,8 @@ router.post("/quote", async (req, res) => {
     }
     const caseData = {
       // the client's own words first; the category ("ppe") only as a last resort
-      product: clean(b.product, 160) || clean(b.productDescription, 160) || clean(b.productType, 160),
+      // the whole description the client wrote (voltage, capacity, material… are part of the case)
+      product: clean(b.product, 600) || clean(b.productDescription, 600) || clean(b.productType, 160),
       description: clean(b.productDescription, 1500),
       quantity: clean(b.quantity, 60),
       supplierName: clean(b.supplierName, 200),
