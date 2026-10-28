@@ -208,3 +208,46 @@ test("long assumptions and warnings arrive whole (not cut at 300 characters)", a
   const html = mails().at(-1).html;
   assert.equal(html.split("fin del supuesto.").length - 1, 2);
 });
+
+test("subject says 'solicitud recibida', flags a preliminary estimate and never says 'cotización confirmada'", async () => {
+  await post("/api/email/quote", { ...CASE, product: "Bombas de agua", productDescription: "Bombas de agua", supplierName: "", supplierUrl: "", requestType: "Cotización confirmada (desde la estimación)", totalCostText: "Q12,345" }, "10.0.0.50");
+  const m = mails().at(-1);
+  assert.match(m.subject, /Caso SEAL-\d{8}-\w+ · Solicitud recibida: Solicitud de cotización formal \(desde la estimación\)/);
+  assert.match(m.subject, /incluye estimación preliminar \(no es cotización\)$/);
+  assert.doesNotMatch(m.subject + m.html, /Cotización confirmada/i);
+  await post("/api/email/quote", { ...CASE, product: "Válvulas", productDescription: "Válvulas", supplierName: "", supplierUrl: "", totalCostText: "", price: "", assumptions: [], warnings: [] }, "10.0.0.51");
+  assert.doesNotMatch(mails().at(-1).subject, /estimación/);
+  assert.equal(mails().at(-1).reply_to ?? mails().at(-1).replyTo, CASE.email);
+});
+
+test("a changed product travels as history, marked as not current", async () => {
+  const j = await (await post("/api/email/quote", { ...CASE, product: "Molino de maíz", productDescription: "", supplierName: "", supplierUrl: "", quantity: "", earlier: ["guantes de nitrilo · cantidad 2,000 · presupuesto US$60"] }, "10.0.0.52")).json();
+  const m = mails().at(-1);
+  assert.match(m.subject, /\(Molino de maíz\)/);
+  assert.match(m.html, /Historial del caso: datos de un producto anterior \(ya no vigentes/);
+  assert.match(m.html, /guantes de nitrilo · cantidad 2,000/);
+  const u = new URL(j.caseUrl);
+  const page = await (await fetch(BASE + u.pathname + u.search)).text();
+  assert.match(page, /Datos anteriores \(ya no vigentes\)/);
+});
+
+test("the same follow-up confirmation sent twice is recorded once", async () => {
+  await post("/api/email/quote", { ...CASE, product: "Repetido", productDescription: "Repetido", supplierName: "", supplierUrl: "" }, "10.0.0.53");
+  const href = mails().at(-1).html.match(/href="([^"]+act[^"]+s=contactado[^"]+)"/)[1].replace(/&amp;/g, "&");
+  const url = new URL(href);
+  const t = url.searchParams.get("t");
+  const send = () => fetch(BASE + url.pathname, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: `s=contactado&t=${t}&by=Ventas&note=Llamada` });
+  const [a, b] = await Promise.all([send(), send()]);
+  const texts = [await a.text(), await b.text()];
+  assert.equal(texts.filter((x) => /Ya estaba registrado/.test(x)).length, 1);
+  const last = texts.find((x) => /Ya estaba registrado/.test(x));
+  assert.equal((last.match(/: contactado/g) || []).length, 1);
+  // opening the link (GET, as an email scanner does) changes nothing
+  const g = await (await fetch(BASE + url.pathname + url.search.replace("contactado", "cliente"))).text();
+  assert.match(g, /Estado actual: <b>contactado/);
+});
+
+test("health reports the running version", async () => {
+  const h = await (await fetch(BASE + "/health")).json();
+  assert.match(h.version, /^\d{4}\.\d{2}\.\d{2}-[a-z]$/);
+});
