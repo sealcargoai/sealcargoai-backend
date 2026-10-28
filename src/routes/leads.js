@@ -180,7 +180,7 @@ router.get("/leads/case/:id", async (req, res) => {
       <div class="card"><b>Lo que recibió SEAL</b><table>
         ${row("Producto", c.product)}${row("Cantidad", c.quantity)}${row("Proveedor", c.supplierName)}
         ${c.priceSource === "usuario" ? row("Precio indicado por el usuario", c.price) + row("Precio publicado", c.publishedPrice) : c.publishedPrice && c.publishedPrice !== c.price ? row("Precio usado en la estimación", c.price) + row("Precio publicado", c.publishedPrice) : row("Precio publicado", c.price)}
-        ${row("Costo total estimado", c.totalCostText)}${row("Tu mensaje", c.message)}
+        ${row("Costo total estimado", c.totalCostText)}${row("Presupuesto de compra", c.budget)}${row("Tu mensaje", c.message)}
         ${list("Supuestos de la estimación", c.assumptions)}${list("Advertencias", c.warnings)}${list("Lo que escribiste en el chat", c.chat)}${list("Datos anteriores (ya no vigentes)", c.earlier)}
       </table></div>
       <p class="muted">${c.supplierName || c.price || c.totalCostText ? "Es una estimación preliminar con información publicada por la plataforma; no es una cotización ni una verificación del proveedor. " : ""}Para algo urgente escribe al WhatsApp de SEAL +502 5996 4664 con tu número de caso.</p>`,
