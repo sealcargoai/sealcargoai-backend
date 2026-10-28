@@ -263,3 +263,10 @@ test("a long product keeps every characteristic in the case and is cut at a whol
   // the cut falls between words: what follows in the full text is a space or punctuation
   assert.match(product.charAt(inSubject.length - 1), /[\s,;]/);
 });
+
+test("the midpoint of a published range is labeled as the price used, next to the published range", async () => {
+  await post("/api/email/quote", { ...CASE, product: "Compresores rango", productDescription: "", supplierName: "Hiross", supplierUrl: "", price: "US$3,200.00 / unidad", priceSource: "publicado", publishedPrice: "US$2,200.00 – US$4,200.00 / unidad" }, "10.0.0.61");
+  const h = mails().at(-1).html;
+  assert.match(h, /Precio usado en la estimación<\/td><td[^>]*><b>US\$3,200\.00 \/ unidad/);
+  assert.match(h, /Precio publicado<\/td><td[^>]*><b>US\$2,200\.00 – US\$4,200\.00 \/ unidad/);
+});
