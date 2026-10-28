@@ -133,6 +133,7 @@ export function updateLead(id, { status, note = "", by = "", transferTo = "", va
   // registry, out of the commercial metrics; needs who and why
   if (exclude) {
     if (!String(note).trim()) return { error: "reason_required" };
+    if (l.excluded && now - l.excluded.at < 10 * 60 * 1000 && l.excluded.by === who) return { lead: l, repeated: true };
     l.excluded = { by: who, at: now, note: String(note).slice(0, 500) };
     l.updatedAt = now;
     l.history.push({ ...entry, action: "excluido_de_metricas" });
@@ -155,6 +156,10 @@ export function updateLead(id, { status, note = "", by = "", transferTo = "", va
     entry.status = status;
   }
   if (!status && !transferTo) return { error: "nothing_to_change" };
+  // the same confirmation sent twice (double click, a resent form, a retry) is recorded once
+  const last = l.history[l.history.length - 1];
+  if (last && now - last.at < 10 * 60 * 1000 && last.action === entry.action && last.status === entry.status && last.by === entry.by && (last.note || "") === entry.note && (last.transferTo || "") === (entry.transferTo || ""))
+    return { lead: l, repeated: true };
   l.updatedAt = now;
   l.history.push(entry);
   scheduleSave();

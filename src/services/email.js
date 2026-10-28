@@ -81,18 +81,19 @@ export async function sendLeadNotification({ name, email, query }) {
   const resend = getResendClient();
 
   const content = `
-    <h2>🎯 New Lead</h2>
-    <p><b>Name:</b> ${e(name)}</p>
-    <p><b>Email:</b> ${e(email)}</p>
-    <p><b>Query:</b> ${e(query)}</p>
+    <h2>Consulta iniciada en SmartTrade AI</h2>
+    <p style="color:#64748b;font-size:13px">Aviso de registro: la persona escribió su consulta en la página de inicio. Aún no es una solicitud a SEAL ni una cotización; si la envía, llega aparte con número de caso.</p>
+    <p><b>Nombre:</b> ${e(name)}</p>
+    <p><b>Correo:</b> ${e(email)}</p>
+    <p><b>Consulta:</b> ${e(query)}</p>
   `;
-
+  const test = isTestRecord(name, email);
   const { data, error } = await resend.emails.send({
     from: FROM_EMAIL,
-    to: recipientsFor(isTestRecord(name, email)),
+    to: recipientsFor(test),
     replyTo: email,
-    subject: `${testTag(name, email)}Nuevo prospecto: ${name.replace(/[\r\n]/g, " ")}`,
-    html: emailWrapper("New Lead Notification", content),
+    subject: `${test ? "[PRUEBA] " : ""}Consulta iniciada (aún sin solicitud): ${name.replace(/[\r\n]/g, " ")}`,
+    html: emailWrapper("Consulta iniciada", content),
   });
 
   if (error) throw new Error(error.message);
@@ -134,7 +135,7 @@ export async function sendSearchLead({
     to: recipientsFor(isTestRecord("", email) || !!testTag(userQuery)),
     ...(email ? { replyTo: email } : {}),
     subject: `${testTag(email, userQuery)}Búsqueda: ${String(userQuery || productType || "producto").replace(/[\r\n]/g, " ").slice(0, 80)}${email ? " — " + email : ""}`,
-    html: emailWrapper("Nuevo prospecto calificado", content),
+    html: emailWrapper("Búsqueda realizada (aún sin solicitud a SEAL)", content),
   });
 
   if (error) throw new Error(error.message);
@@ -183,7 +184,7 @@ function fmtDate(ms) {
 const FIELD_LABEL = {
   product: "producto", description: "descripción", quantity: "cantidad", supplierName: "proveedor", supplierUrl: "enlace del proveedor",
   price: "precio", priceSource: "origen del precio", publishedPrice: "precio publicado", totalCostText: "costo estimado", budget: "presupuesto",
-  destination: "destino", message: "mensaje", caseRef: "informe", assumptions: "supuestos", warnings: "advertencias", chat: "conversación",
+  destination: "destino", message: "mensaje", caseRef: "informe", assumptions: "supuestos", warnings: "advertencias", chat: "conversación", earlier: "historial de producto",
   name: "nombre", phone: "teléfono", company: "empresa",
 };
 export function caseEmailHtml(lead, links, update = null) {
@@ -210,7 +211,8 @@ export function caseEmailHtml(lead, links, update = null) {
     `Caso ${lead.id}`,
     `
     ${update ? `<p style="margin:0 0 12px;padding:10px;background:#e0f2fe;border-radius:6px"><b>Actualización del mismo caso</b> (no es un caso nuevo): el cliente cambió ${e(update.map((k) => FIELD_LABEL[k] || k).join(", "))}. Abajo está el caso completo, ya actualizado.</p>` : ""}
-    <h2 style="margin-top:0">📥 ${e(lead.requestType || "Solicitud")} — caso ${e(lead.id)}</h2>
+    <h2 style="margin-top:0">📥 Solicitud recibida: ${e(requestLabel(lead.requestType))} — caso ${e(lead.id)}</h2>
+    <p style="margin:0 0 8px;font-size:13px;color:#334155">${c.totalCostText ? "Incluye una <b>estimación preliminar</b> calculada por la herramienta; no es una cotización comercial de SEAL." : "Es una solicitud del cliente; no incluye cotización comercial."}</p>
     <p style="margin:0 0 12px;color:#64748b">Recibido ${e(fmtDate(lead.createdAt))} · desde: ${e(lead.source || "—")}${lead.intent ? ` · intención: ${e(lead.intent)}` : ""}${lead.lang === "en" ? " · cliente en inglés" : ""}</p>
     <table style="border-collapse:collapse;width:100%">
       ${row("Nombre", p.name)}${row("Correo", p.email)}${row("Teléfono", p.phone)}${row("Empresa", p.company)}
@@ -225,6 +227,7 @@ export function caseEmailHtml(lead, links, update = null) {
     ${c.message ? `<h3 style="margin:18px 0 6px;color:#0B3C5D">Mensaje del cliente</h3><p style="margin:0;white-space:pre-line">${e(c.message)}</p>` : ""}
     ${list("Supuestos usados en la estimación", c.assumptions, "#0369a1")}
     ${list("Advertencias que vio el cliente", c.warnings, "#b45309")}
+    ${list("Historial del caso: datos de un producto anterior (ya no vigentes, no cotizar con ellos)", c.earlier, "#64748b")}
     ${chat}
     <p style="margin:18px 0 0;padding:10px;background:#fef3c7;border-radius:6px;font-size:13px">SEAL atiende primero este caso. Si conviene derivarlo a otra empresa del grupo (ImportaGuate, Courier.com.gt, DLZ o DLZ Foods), una persona lo valida: no es automático. Los datos del proveedor y la estimación vienen de lo publicado en la plataforma y no están verificados.</p>
     ${buttons}
@@ -232,15 +235,29 @@ export function caseEmailHtml(lead, links, update = null) {
   );
 }
 
-export async function sendCaseToSeal(lead, links, update = null) {
-  const resend = getResendClient();
+/**
+ * The subject says what the email is: a request received (always: the tool never
+ * confirms a commercial quote), whether it carries a preliminary estimate, and
+ * whether it is an update of the same case. "Cotización confirmada" only exists
+ * once SEAL sends its own quote, never from the tool.
+ */
+export function requestLabel(requestType) {
+  return String(requestType || "Solicitud").replace(/[\r\n]/g, " ").replace(/cotizaci[oó]n\s+confirmada/gi, "Solicitud de cotización formal").slice(0, 80);
+}
+export function caseSubject(lead, update = null) {
   const c = lead.case || {};
   const product = String(c.product || c.description || "").replace(/[\r\n]/g, " ").slice(0, 60);
+  const estimate = c.totalCostText ? " · incluye estimación preliminar (no es cotización)" : "";
+  return `${lead.test ? "[PRUEBA] " : ""}${update ? "Actualización · " : ""}Caso ${lead.id} · Solicitud recibida: ${requestLabel(lead.requestType)} — ${String(lead.contact.name).replace(/[\r\n]/g, " ")}${product ? ` (${product})` : ""}${estimate}`;
+}
+
+export async function sendCaseToSeal(lead, links, update = null) {
+  const resend = getResendClient();
   const { data, error } = await resend.emails.send({
     from: FROM_EMAIL,
     to: recipientsFor(!!lead.test),
     replyTo: lead.contact.email,
-    subject: `${lead.test ? "[PRUEBA] " : ""}${update ? "Actualización · " : ""}Caso ${lead.id}: ${String(lead.requestType || "Solicitud").replace(/[\r\n]/g, " ")} — ${String(lead.contact.name).replace(/[\r\n]/g, " ")}${product ? ` (${product})` : ""}`,
+    subject: caseSubject(lead, update),
     html: caseEmailHtml(lead, links, update),
   });
   if (error) throw new Error(scrubEmails(error.message));
