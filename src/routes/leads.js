@@ -179,7 +179,7 @@ router.get("/leads/case/:id", async (req, res) => {
       ${data.notification.deliveryText ? `<div class="card"><span class="muted">Aviso a SEAL:</span> ${e(data.notification.deliveryText)}</div>` : ""}
       <div class="card"><b>Lo que recibió SEAL</b><table>
         ${row("Producto", c.product)}${row("Cantidad", c.quantity)}${row("Proveedor", c.supplierName)}
-        ${c.priceSource === "usuario" ? row("Precio indicado por el usuario", c.price) + row("Precio publicado", c.publishedPrice) : row("Precio publicado", c.price)}
+        ${c.priceSource === "usuario" ? row("Precio indicado por el usuario", c.price) + row("Precio publicado", c.publishedPrice) : c.publishedPrice && c.publishedPrice !== c.price ? row("Precio usado en la estimación", c.price) + row("Precio publicado", c.publishedPrice) : row("Precio publicado", c.price)}
         ${row("Costo total estimado", c.totalCostText)}${row("Tu mensaje", c.message)}
         ${list("Supuestos de la estimación", c.assumptions)}${list("Advertencias", c.warnings)}${list("Lo que escribiste en el chat", c.chat)}${list("Datos anteriores (ya no vigentes)", c.earlier)}
       </table></div>
