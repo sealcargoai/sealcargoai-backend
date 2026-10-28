@@ -251,3 +251,15 @@ test("health reports the running version", async () => {
   const h = await (await fetch(BASE + "/health")).json();
   assert.match(h.version, /^\d{4}\.\d{2}\.\d{2}-[a-z]$/);
 });
+
+test("a long product keeps every characteristic in the case and is cut at a whole word in the subject", async () => {
+  const product = "compresores industriales de tornillo, trifásicos 220 V, 60 Hz, tanque de 500 litros y libres de aceite, con secador integrado y filtro de partículas de 0.01 micras";
+  await post("/api/email/quote", { ...CASE, product, productDescription: "", supplierName: "", supplierUrl: "", totalCostText: "", price: "", assumptions: [], warnings: [] }, "10.0.0.60");
+  const m = mails().at(-1);
+  assert.match(m.html, /libres de aceite, con secador integrado y filtro de partículas de 0\.01 micras/);
+  const inSubject = m.subject.match(/\(([^)]*)\)$/)[1];
+  assert.match(inSubject, /…$/);
+  assert.ok(product.startsWith(inSubject.slice(0, -1)));
+  // the cut falls between words: what follows in the full text is a space or punctuation
+  assert.match(product.charAt(inSubject.length - 1), /[\s,;]/);
+});
