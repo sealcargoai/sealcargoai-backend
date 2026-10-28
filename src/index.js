@@ -69,10 +69,14 @@ app.get("/", (_req, res) => {
   });
 });
 
+// the version actually running (the commit Railway built), to tell which code a test hit
+export const BACKEND_VERSION = "2026.10.28-a";
 app.get("/health", (_req, res) => {
   res.json({
     status:          "ok",
     message:         "SealCargo Backend is running!",
+    version:         BACKEND_VERSION,
+    commit:          String(process.env.RAILWAY_GIT_COMMIT_SHA || "").slice(0, 7) || undefined,
     timestamp:       new Date().toISOString(),
   });
 });
