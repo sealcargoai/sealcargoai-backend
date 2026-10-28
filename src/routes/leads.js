@@ -113,7 +113,7 @@ router.post("/leads/act/:id", (req, res) => {
     const msg = r.error === "validation_required" || r.error === "who_required" ? (s === "derivar" ? "Falta el nombre de la persona que valida la derivación." : "Falta tu nombre: queda registrado quién hizo el cambio.") : r.error === "unknown_company" ? "Elige una empresa del grupo." : r.error === "reason_required" ? "Falta el motivo para excluirlo de las métricas." : "No se pudo registrar.";
     return res.status(400).send(page("Error", `<h1 class="err">${e(msg)}</h1><p><a href="?s=${encodeURIComponent(s)}&t=${encodeURIComponent(clean(b.t, 64))}">Volver</a></p>`));
   }
-  res.send(page("Registrado", `<h1 class="ok">Registrado: ${e(LABEL[s])}</h1>${caseSummary(r.lead)}`));
+  res.send(page("Registrado", `<h1 class="ok">${r.repeated ? "Ya estaba registrado" : "Registrado"}: ${e(LABEL[s])}</h1>${r.repeated ? '<p class="muted">Este cambio ya se había confirmado; no se registró dos veces.</p>' : ""}${caseSummary(r.lead)}`));
 });
 
 // ── funnel ───────────────────────────────────────────────────────────────────
@@ -181,7 +181,7 @@ router.get("/leads/case/:id", async (req, res) => {
         ${row("Producto", c.product)}${row("Cantidad", c.quantity)}${row("Proveedor", c.supplierName)}
         ${c.priceSource === "usuario" ? row("Precio indicado por el usuario", c.price) + row("Precio publicado", c.publishedPrice) : row("Precio publicado", c.price)}
         ${row("Costo total estimado", c.totalCostText)}${row("Tu mensaje", c.message)}
-        ${list("Supuestos de la estimación", c.assumptions)}${list("Advertencias", c.warnings)}${list("Lo que escribiste en el chat", c.chat)}
+        ${list("Supuestos de la estimación", c.assumptions)}${list("Advertencias", c.warnings)}${list("Lo que escribiste en el chat", c.chat)}${list("Datos anteriores (ya no vigentes)", c.earlier)}
       </table></div>
       <p class="muted">${c.supplierName || c.price || c.totalCostText ? "Es una estimación preliminar con información publicada por la plataforma; no es una cotización ni una verificación del proveedor. " : ""}Para algo urgente escribe al WhatsApp de SEAL +502 5996 4664 con tu número de caso.</p>`,
     ),

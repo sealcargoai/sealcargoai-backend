@@ -87,6 +87,8 @@ router.post("/quote", async (req, res) => {
       assumptions: list(b.assumptions, 12, 1000),
       warnings: list(b.warnings, 12, 1000),
       chat: list(b.chat, 8, 500),
+      // data of an earlier product of the same case: history, not the current request
+      earlier: list(b.earlier, 5, 300),
     };
     if (!caseData.totalCostText && Number(b.totalCost) > 0) caseData.totalCostText = `US$${Math.round(Number(b.totalCost)).toLocaleString("en-US")}`;
     for (const k of Object.keys(caseData)) if (caseData[k] === "") delete caseData[k];
