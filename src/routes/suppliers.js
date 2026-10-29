@@ -3,7 +3,7 @@ import NodeCache from "node-cache";
 import { searchSuppliers } from "../services/alibaba.js";
 import { scoreSuppliers, categorizeSuppliers } from "../services/scoring.js";
 import { refineKeyword, shortenKeyword } from "./ai.js";
-import { clientIp, clean } from "../middleware/security.js";
+import { clientIp, clean, QTY_MIN, QTY_MAX, BUDGET_MAX } from "../middleware/security.js";
 import { sendSearchLead, scrubEmails } from "../services/email.js";
 
 // Send the search to SEAL sales without delaying the user's response
@@ -115,11 +115,22 @@ router.post("/search", async (req, res) => {
         message: "Description too vague to search.",
       });
     }
-    // Same limits as the form: whole units 1–10,000,000; budget a finite positive amount
+    // Same limits as the form: whole units 1–10,000,000; budget a finite positive amount up to
+    // US$100,000,000. A value that was sent but is out of those limits is rejected, never rounded
+    // or clamped (3.5 used to become 3 and 10,000,001 became 10,000,000 without saying so).
+    const given = (v) => v !== undefined && v !== null && v !== "";
     const qtyNum = typeof quantity === "number" || typeof quantity === "string" ? Number(quantity) : NaN;
-    const qty = Number.isFinite(qtyNum) && qtyNum >= 1 ? Math.min(Math.floor(qtyNum), 10_000_000) : 1000;
+    if (given(quantity) && !(Number.isInteger(qtyNum) && qtyNum >= QTY_MIN && qtyNum <= QTY_MAX)) {
+      ticket.release();
+      return res.status(400).json({ error: !Number.isInteger(qtyNum) ? "quantity_not_integer" : qtyNum < QTY_MIN ? "quantity_below_min" : "quantity_above_max" });
+    }
+    const qty = given(quantity) ? qtyNum : 1000;
     const bdgNum = typeof budget === "number" || typeof budget === "string" ? Number(budget) : NaN;
-    const bdg = Number.isFinite(bdgNum) && bdgNum > 0 ? Math.min(bdgNum, 100_000_000) : 50000;
+    if (given(budget) && !(Number.isFinite(bdgNum) && bdgNum > 0 && bdgNum <= BUDGET_MAX)) {
+      ticket.release();
+      return res.status(400).json({ error: Number.isFinite(bdgNum) && bdgNum > BUDGET_MAX ? "budget_above_max" : "budget_invalid" });
+    }
+    const bdg = given(budget) ? bdgNum : 50000;
 
     console.log(`\n🔍 Search request`);
     // the client's own words are not logged (they can carry names, phones or emails)
