@@ -119,3 +119,44 @@ export function clean(value, max = 500) {
   const v = typeof value === "string" ? value : typeof value === "number" && Number.isFinite(value) ? String(value) : "";
   return v.trim().slice(0, max);
 }
+
+// Order limits, the same the site applies (form and chat): the quantity is a whole number
+// of units from 1 to 10,000,000 and the purchase budget goes up to US$100,000,000.
+export const QTY_MIN = 1;
+export const QTY_MAX = 10_000_000;
+export const BUDGET_MAX = 100_000_000;
+
+/**
+ * Server-side check of the quantity a request carries ("4", "2,000 piezas", "1.000 unidades").
+ * Returns "" when valid (or when there is no number at all), else the reason. The server never
+ * rounds or fixes a quantity: an invalid one is rejected so SEAL never receives it as fact.
+ */
+export function quantityError(value) {
+  const v = String(value ?? "").trim();
+  if (!v) return "";
+  const m = v.match(/(?:^|[^\d])([-−]\s?)?(\d[\d.,]*\d|\d)/);
+  if (!m) return "";
+  if (m[1]) return "quantity_below_min";
+  const raw = m[2];
+  let n;
+  if (/^\d{1,3}(?:([.,])\d{3})(?:\1\d{3})*$/.test(raw)) n = Number(raw.replace(/[.,]/g, ""));
+  else if (/[.,]/.test(raw)) return "quantity_not_integer";
+  else n = Number(raw);
+  if (!Number.isInteger(n)) return "quantity_not_integer";
+  if (n < QTY_MIN) return "quantity_below_min";
+  if (n > QTY_MAX) return "quantity_above_max";
+  return "";
+}
+
+/** The purchase budget ("US$5,000", "4500.01", "Q40,000"): "" when valid or absent. */
+export function budgetError(value) {
+  const v = String(value ?? "").trim();
+  if (!v) return "";
+  const m = v.replace(/\s+/g, "").match(/([-−])?(\d[\d,]*(?:\.\d+)?)/);
+  if (!m) return "";
+  if (m[1]) return "budget_below_min";
+  const n = Number(m[2].replace(/,/g, ""));
+  if (!(n > 0)) return "budget_below_min";
+  if (n > BUDGET_MAX) return "budget_above_max";
+  return "";
+}
