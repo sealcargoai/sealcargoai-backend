@@ -9,7 +9,7 @@ import {
 } from "../services/email.js";
 import { registerLead, markNotified, leadsPersistent } from "../services/leadStore.js";
 import { linksFor, baseUrl, caseLink } from "./leads.js";
-import { isEmail, clean } from "../middleware/security.js";
+import { isEmail, clean, quantityError, budgetError } from "../middleware/security.js";
 import { hasSearched, emailKey, verifyReportToken } from "../services/quotaStore.js";
 
 // Reports go out from SEAL's address: only someone who ran a search may send
@@ -91,6 +91,10 @@ router.post("/quote", async (req, res) => {
       // data of an earlier product of the same case: history, not the current request
       earlier: list(b.earlier, 5, 300),
     };
+    // the same limits the site applies: an invalid quantity or budget never reaches SEAL as data
+    // of the case (nothing is registered or emailed; the page shows the reason)
+    const invalid = quantityError(caseData.quantity) || budgetError(caseData.budget);
+    if (invalid) return res.status(400).json({ error: invalid });
     if (!caseData.totalCostText && Number(b.totalCost) > 0) caseData.totalCostText = `US$${Math.round(Number(b.totalCost)).toLocaleString("en-US")}`;
     for (const k of Object.keys(caseData)) if (caseData[k] === "") delete caseData[k];
     const { lead, duplicate, changes } = registerLead({
