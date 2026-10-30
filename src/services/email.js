@@ -5,7 +5,22 @@ import { isQa } from "./quotaStore.js";
 /* ─────────────────────────────────────────────
    Safe Resend Client Creator
 ───────────────────────────────────────────── */
+// EMAIL_DRY_RUN=1 (staging / preview / tests): no email can leave this server. Every send is
+// replaced by a log line with no addresses or content, and answers like Resend would.
+export const emailDryRun = () => process.env.EMAIL_DRY_RUN === "1";
+let dryN = 0;
+const dryClient = {
+  emails: {
+    send: async (msg) => {
+      const n = Array.isArray(msg?.to) ? msg.to.length : msg?.to ? 1 : 0;
+      console.log(`✉️  [EMAIL_DRY_RUN] email suppressed (${n} recipient(s), not sent)`);
+      return { data: { id: `dry-run-${Date.now()}-${++dryN}` }, error: null };
+    },
+    get: async () => ({ data: { last_event: "dry_run" }, error: null }),
+  },
+};
 function getResendClient() {
+  if (emailDryRun()) return dryClient;
   const apiKey = process.env.RESEND_API_KEY;
 
   if (!apiKey) {
