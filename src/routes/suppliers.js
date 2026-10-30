@@ -3,7 +3,7 @@ import NodeCache from "node-cache";
 import { searchSuppliers } from "../services/alibaba.js";
 import { scoreSuppliers, categorizeSuppliers } from "../services/scoring.js";
 import { refineKeyword, shortenKeyword } from "./ai.js";
-import { clientIp, clean, QTY_MIN, QTY_MAX, BUDGET_MAX } from "../middleware/security.js";
+import { clientIp, clean, malformedFields, QTY_MIN, QTY_MAX, BUDGET_MAX } from "../middleware/security.js";
 import { sendSearchLead, scrubEmails } from "../services/email.js";
 
 // Send the search to SEAL sales without delaying the user's response
@@ -63,10 +63,14 @@ router.post("/search", async (req, res) => {
   let ticket = null;
   try {
     // Text fields always as text, with the form's limits (arrays or objects never reach the search)
-    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+    // an object or an array where text goes is a malformed request: rejected before anything is
+    // counted or searched (it used to be joined or dropped silently)
+    const malformed = malformedFields(body, ["userQuery", "productType", "material", "destination", "userEmail", "quantity", "budget", "volumeCbm", "weightKg"]);
+    if (malformed.length) return res.status(400).json({ error: "invalid_fields", fields: malformed.slice(0, 10) });
     for (const k of ["userQuery", "productType", "material", "destination"]) {
       const v = body[k];
-      body[k] = typeof v === "string" ? v.slice(0, 1500) : v == null ? "" : String(Array.isArray(v) ? v.join(" ") : "").slice(0, 1500);
+      body[k] = typeof v === "string" ? v.slice(0, 1500) : v == null ? "" : String(v).slice(0, 1500);
     }
     req.body = body;
     const {
@@ -80,22 +84,7 @@ router.post("/search", async (req, res) => {
     const userEmail = normalizeEmail(req.body.userEmail);
     const ip = clientIp(req);
 
-    // ── SEARCH LIMIT CHECK: the slot is reserved now (parallel requests can't
-    // pass the limit) and given back below if the search shows nothing ──
-    ticket = reserveSearch(userEmail, ip);
-    if (!ticket) {
-      return res.status(429).json({
-        error: "Search limit reached",
-        message: "Has alcanzado el límite de búsquedas gratuitas.",
-        limitReached: true,
-        reason: limitReason(userEmail, ip),
-        remainingSearches: 0,
-        limit: SEARCH_LIMIT,
-      });
-    }
-
     if (!productType) {
-      ticket.release();
       return res.status(400).json({ error: "productType is required" });
     }
 
@@ -103,7 +92,6 @@ router.post("/search", async (req, res) => {
     // Nothing is searched or counted ("abc" used to return unrelated products).
     if (!descriptionIsDetailed(userQuery)) {
       console.log(`⚠️ Description too vague (${String(userQuery || "").length} chars)`);
-      ticket.release();
       return res.json({
         needsMoreDetail: true,
         noRelevantMatches: true,
@@ -119,18 +107,32 @@ router.post("/search", async (req, res) => {
     // US$100,000,000. A value that was sent but is out of those limits is rejected, never rounded
     // or clamped (3.5 used to become 3 and 10,000,001 became 10,000,000 without saying so).
     const given = (v) => v !== undefined && v !== null && v !== "";
-    const qtyNum = typeof quantity === "number" || typeof quantity === "string" ? Number(quantity) : NaN;
+    // only a plain whole number ("4", 4): "5e2", "0x10", " 12 ", "4.0" are malformed, never converted
+    const qtyNum = typeof quantity === "number" ? quantity : typeof quantity === "string" && /^\d+$/.test(quantity) ? Number(quantity) : NaN;
     if (given(quantity) && !(Number.isInteger(qtyNum) && qtyNum >= QTY_MIN && qtyNum <= QTY_MAX)) {
-      ticket.release();
-      return res.status(400).json({ error: !Number.isInteger(qtyNum) ? "quantity_not_integer" : qtyNum < QTY_MIN ? "quantity_below_min" : "quantity_above_max" });
+      return res.status(400).json({ error: typeof quantity === "string" && /^\s*-?\d+[.,]\d+\s*$/.test(quantity) ? "quantity_not_integer" : !Number.isFinite(qtyNum) ? "quantity_invalid" : !Number.isInteger(qtyNum) ? "quantity_not_integer" : qtyNum < QTY_MIN ? "quantity_below_min" : "quantity_above_max" });
     }
     const qty = given(quantity) ? qtyNum : 1000;
-    const bdgNum = typeof budget === "number" || typeof budget === "string" ? Number(budget) : NaN;
+    const bdgNum = typeof budget === "number" ? budget : typeof budget === "string" && /^\d+(?:\.\d{1,2})?$/.test(budget) ? Number(budget) : NaN;
     if (given(budget) && !(Number.isFinite(bdgNum) && bdgNum > 0 && bdgNum <= BUDGET_MAX)) {
-      ticket.release();
       return res.status(400).json({ error: Number.isFinite(bdgNum) && bdgNum > BUDGET_MAX ? "budget_above_max" : "budget_invalid" });
     }
     const bdg = given(budget) ? bdgNum : 50000;
+
+    // Validation passed: only now is a search slot reserved (an invalid request never spends a free search)
+    // ── SEARCH LIMIT CHECK: the slot is reserved now (parallel requests can't
+    // pass the limit) and given back below if the search shows nothing ──
+    ticket = reserveSearch(userEmail, ip);
+    if (!ticket) {
+      return res.status(429).json({
+        error: "Search limit reached",
+        message: "Has alcanzado el límite de búsquedas gratuitas.",
+        limitReached: true,
+        reason: limitReason(userEmail, ip),
+        remainingSearches: 0,
+        limit: SEARCH_LIMIT,
+      });
+    }
 
     console.log(`\n🔍 Search request`);
     // the client's own words are not logged (they can carry names, phones or emails)

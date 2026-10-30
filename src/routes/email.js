@@ -9,7 +9,7 @@ import {
 } from "../services/email.js";
 import { registerLead, markNotified, leadsPersistent } from "../services/leadStore.js";
 import { linksFor, baseUrl, caseLink } from "./leads.js";
-import { isEmail, clean, quantityError, budgetError } from "../middleware/security.js";
+import { isEmail, clean, quantityError, budgetError, malformedFields } from "../middleware/security.js";
 import { hasSearched, emailKey, verifyReportToken } from "../services/quotaStore.js";
 
 // Reports go out from SEAL's address: only someone who ran a search may send
@@ -32,6 +32,7 @@ const router = express.Router();
 
 router.post("/lead", async (req, res) => {
   try {
+    if (malformedFields(req.body, ["name", "email", "query"]).length) return res.status(400).json({ error: "invalid_fields" });
     const name = clean(req.body.name, 120);
     const email = clean(req.body.email, 254);
     const query = clean(req.body.query, 1000);
@@ -58,6 +59,17 @@ const list = (v, max = 12, len = 300) =>
 router.post("/quote", async (req, res) => {
   try {
     const b = req.body || {};
+    // a malformed request (objects or arrays where text goes, a budget or quantity that is not a
+    // plain amount) is rejected FIRST: nothing is registered, emailed or counted
+    const malformed = malformedFields(
+      b,
+      ["name", "email", "phone", "company", "product", "productDescription", "productType", "quantity", "supplierName", "supplierUrl", "price", "priceSource", "publishedPrice", "totalCostText", "totalCost", "budget", "destination", "message", "caseRef", "source", "intent", "requestType", "lang"],
+      ["assumptions", "warnings", "chat", "earlier"],
+    );
+    if (malformed.length) return res.status(400).json({ error: "invalid_fields", fields: malformed.slice(0, 10) });
+    if (b.totalCost !== undefined && b.totalCost !== null && b.totalCost !== "" && !Number.isFinite(Number(b.totalCost))) return res.status(400).json({ error: "invalid_fields", fields: ["totalCost"] });
+    const preInvalid = quantityError(b.quantity) || budgetError(b.budget);
+    if (preInvalid) return res.status(400).json({ error: preInvalid });
     const contact = {
       name: clean(b.name, 120),
       email: clean(b.email, 254),

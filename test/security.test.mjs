@@ -53,14 +53,31 @@ test("line breaks in the name never reach the subject (no header injection)", as
   assert.equal(m.bcc, undefined);
 });
 
-test("objects or arrays where text is expected are rejected or ignored", async () => {
+// Replaced 2026-10-29 (cierre 29-b): this test used to accept { product: {…}, assumptions: "no-array",
+// chat: [{…}] } with 200 and register the case WITHOUT the product (the object was dropped silently).
+// The requirement is stricter: a malformed request is rejected before it is registered or emailed.
+// The check below is equivalent in coverage (same malformed shapes) and stronger in effect.
+test("objects or arrays where text is expected are rejected: nothing registered or emailed", async () => {
   assert.equal((await post("/api/email/quote", { name: { $gt: "" }, email: "ana@empresa.gt" })).status, 400);
   assert.equal((await post("/api/email/quote", { name: "Ana", email: ["ana@empresa.gt"] })).status, 400);
-  const ok = await post("/api/email/quote", { name: "Ana", email: "ana3@empresa.gt", product: { toString: 1 }, assumptions: "no-array", chat: [{ a: 1 }, "texto"] });
+  const before = mails().length;
+  for (const body of [
+    { name: "Ana", email: "ana3@empresa.gt", product: { toString: 1 } },
+    { name: "Ana", email: "ana3@empresa.gt", product: "Sillas", assumptions: "no-array" },
+    { name: "Ana", email: "ana3@empresa.gt", product: "Sillas", chat: [{ a: 1 }, "texto"] },
+    { name: "Ana", email: "ana3@empresa.gt", product: "Sillas", quantity: { n: 4 } },
+    { name: "Ana", email: "ana3@empresa.gt", product: "Sillas", quantity: [4] },
+    { name: "Ana", email: "ana3@empresa.gt", product: "Sillas", budget: { usd: 5000 } },
+    { name: "Ana", email: "ana3@empresa.gt", product: "Sillas", budget: "5e3" },
+    { name: "Ana", email: "ana3@empresa.gt", product: "Sillas", budget: "cinco mil" },
+  ]) {
+    const r = await post("/api/email/quote", body);
+    assert.equal(r.status, 400, JSON.stringify(body));
+  }
+  assert.equal(mails().length, before);
+  // the same request well formed is accepted
+  const ok = await post("/api/email/quote", { name: "Ana", email: "ana3@empresa.gt", product: "Sillas", chat: ["texto"] });
   assert.equal(ok.status, 200);
-  const page = await (await fetch(new URL((await ok.json()).caseUrl).pathname.replace(/^/, BASE) + "?t=" + new URL((await (await post("/api/email/quote", { name: "Ana", email: "ana3@empresa.gt" })).json()).caseUrl).searchParams.get("t") + "&format=json")).json();
-  assert.equal(page.case.product, undefined);
-  assert.deepEqual(page.case.chat, ["texto"]);
 });
 
 test("bad JSON and oversized bodies are refused without details", async () => {
