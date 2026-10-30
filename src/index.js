@@ -8,7 +8,7 @@ import aiRouter from "./routes/ai.js";
 import emailRoutes from "./routes/email.js";
 import ratesRouter from "./routes/rates.js";
 import leadsRouter, { learnBase } from "./routes/leads.js";
-import { recipientConfig } from "./services/email.js";
+import { recipientConfig, emailDryRun } from "./services/email.js";
 import { corsOrigin, rateLimit } from "./middleware/security.js";
 import { isQa, flushQuota } from "./services/quotaStore.js";
 import { flushLeads } from "./services/leadStore.js";
@@ -70,13 +70,15 @@ app.get("/", (_req, res) => {
 });
 
 // the version actually running (the commit Railway built), to tell which code a test hit
-export const BACKEND_VERSION = "2026.10.29-a";
+export const BACKEND_VERSION = "2026.10.29-b";
 app.get("/health", (_req, res) => {
   res.json({
     status:          "ok",
     message:         "SealCargo Backend is running!",
     version:         BACKEND_VERSION,
     commit:          String(process.env.RAILWAY_GIT_COMMIT_SHA || "").slice(0, 7) || undefined,
+    // true = this server cannot send email (staging / preview / tests)
+    emailDryRun:     emailDryRun(),
     timestamp:       new Date().toISOString(),
   });
 });
