@@ -48,12 +48,13 @@ test("malformedFields: objects and arrays in text fields, non-string list items"
   assert.deepEqual(malformedFields([], ["a"]), ["body"]);
 });
 
-function server(extraEnv) {
+function server(extraEnv, portBase) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seal-29b-"));
   const MAIL_LOG = path.join(dir, "mails.jsonl");
-  const PORT = 4300 + Math.floor(Math.random() * 400);
-  const s = { dir, MAIL_LOG, BASE: `http://127.0.0.1:${PORT}`, proc: null };
-  s.start = () =>
+  const s = { dir, MAIL_LOG, BASE: "", proc: null };
+  // a free port: each server has its own range, and a start that fails (port taken by another
+  // test file running in parallel) is retried on another port instead of failing the suite
+  const once = (PORT) =>
     new Promise((resolve, reject) => {
       const p = spawn(process.execPath, ["--import", path.resolve("test/fake-resend.mjs"), "src/index.js"], {
         env: {
@@ -73,10 +74,30 @@ function server(extraEnv) {
         },
         stdio: ["ignore", "pipe", "pipe"],
       });
-      s.proc = p;
-      p.stdout.on("data", (d) => String(d).includes("running at") && resolve(p));
-      p.on("exit", (c) => reject(new Error(`server exited ${c}`)));
+      p.stdout.on("data", (d) => {
+        if (String(d).includes("running at")) {
+          p.removeAllListeners("exit");
+          resolve(p);
+        }
+      });
+      let err = "";
+      p.stderr.on("data", (d) => (err += String(d)));
+      p.on("exit", (c) => reject(new Error(`server exited ${c}: ${err.slice(-300)}`)));
     });
+  s.start = async () => {
+    let last;
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const PORT = portBase + Math.floor(Math.random() * 190);
+      try {
+        s.proc = await once(PORT);
+        s.BASE = `http://127.0.0.1:${PORT}`;
+        return s.proc;
+      } catch (e) {
+        last = e;
+      }
+    }
+    throw last;
+  };
   s.stop = async () => {
     await new Promise((r) => {
       s.proc.removeAllListeners("exit");
@@ -89,8 +110,8 @@ function server(extraEnv) {
   s.post = (p, body, ip) => fetch(s.BASE + p, { method: "POST", headers: { "content-type": "application/json", "x-real-ip": ip }, body: JSON.stringify(body) });
   return s;
 }
-const A = server({});
-const DRY = server({ EMAIL_DRY_RUN: "1" });
+const A = server({}, 4300);
+const DRY = server({ EMAIL_DRY_RUN: "1" }, 4500);
 before(async () => {
   await A.start();
   await DRY.start();
