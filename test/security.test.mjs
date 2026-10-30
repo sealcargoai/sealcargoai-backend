@@ -9,7 +9,9 @@ import path from "node:path";
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seal-sec-"));
 const MAIL_LOG = path.join(dir, "mails.jsonl");
-const PORT = 4000 + Math.floor(Math.random() * 90);
+// 4045 is one of the ports fetch() refuses ("bad port", WHATWG Fetch §2.10): it made this file fail
+// about once in 90 runs with "fetch failed". It is skipped.
+const PORT = ((p) => (p === 4045 ? 4046 : p))(4000 + Math.floor(Math.random() * 90));
 const BASE = `http://127.0.0.1:${PORT}`;
 let srv;
 before(async () => {
