@@ -132,8 +132,15 @@ export const BUDGET_MAX = 100_000_000;
  * rounds or fixes a quantity: an invalid one is rejected so SEAL never receives it as fact.
  */
 export function quantityError(value) {
+  // only text or a number: an object or an array is not a quantity (it used to be dropped silently)
+  if (value !== undefined && value !== null && typeof value !== "string" && typeof value !== "number") return "quantity_invalid";
+  if (typeof value === "number" && !Number.isFinite(value)) return "quantity_invalid";
   const v = String(value ?? "").trim();
   if (!v) return "";
+  // a notation ("5e2", "10^3"), a range ("5-6", "5 o 6", "5 a 10") or an approximation is not an exact quantity
+  if (/\d\s*(?:e[+-]?\d|\^|\*\*|[x×]\s*10\s*\^)/i.test(v)) return "quantity_invalid";
+  if (/^\D*\d[\d.,]*\s*(?:-|–|\/|\bo\b|\bó\b|\bor\b|\ba\b|\bto\b|\by\b|\band\b)\s*\d/i.test(v)) return "quantity_invalid";
+  if (/^\s*(?:unos|unas|aprox\w*|alrededor|about|around|approximately|entre|between|m[aá]s\s+o\s+menos|cerca\s+de)\b/i.test(v)) return "quantity_invalid";
   const m = v.match(/(?:^|[^\d])([-−]\s?)?(\d[\d.,]*\d|\d)/);
   if (!m) return "";
   if (m[1]) return "quantity_below_min";
@@ -150,13 +157,42 @@ export function quantityError(value) {
 
 /** The purchase budget ("US$5,000", "4500.01", "Q40,000"): "" when valid or absent. */
 export function budgetError(value) {
+  if (value !== undefined && value !== null && typeof value !== "string" && typeof value !== "number") return "budget_invalid";
+  if (typeof value === "number") return !Number.isFinite(value) ? "budget_invalid" : value <= 0 ? "budget_below_min" : value > BUDGET_MAX ? "budget_above_max" : "";
   const v = String(value ?? "").trim();
   if (!v) return "";
-  const m = v.replace(/\s+/g, "").match(/([-−])?(\d[\d,]*(?:\.\d+)?)/);
-  if (!m) return "";
-  if (m[1]) return "budget_below_min";
+  // the formats the site sends ("US$5,000", "5000", "4500.01", "Q40,000"): anything else is malformed
+  // ("5e3", "5,00,0", "1.000,50", "12abc", "US$", "cinco mil") — never read partially
+  const compact = v.replace(/\s+/g, "");
+  if (!/^[-−]?(?:us\$|usd|\$|q\.?|gtq)?[-−]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?(?:usd|d[oó]lares|dollars|gtq|quetzales)?$/i.test(compact)) return "budget_invalid";
+  const m = compact.match(/([-−])?(\d[\d,]*(?:\.\d+)?)/);
+  if (!m) return "budget_invalid";
+  if (m[1] || /^[^\d]*[-−]/.test(compact)) return "budget_below_min";
   const n = Number(m[2].replace(/,/g, ""));
   if (!(n > 0)) return "budget_below_min";
   if (n > BUDGET_MAX) return "budget_above_max";
   return "";
+}
+
+/**
+ * Fields of a request that must be text (or a plain number): an object or an array in any of them
+ * is a malformed request, rejected before anything is registered, counted or emailed (clean()
+ * would otherwise turn it into "" and the case would travel without that field, silently).
+ */
+export function malformedFields(body, textFields, listFields = []) {
+  const bad = [];
+  if (!body || typeof body !== "object" || Array.isArray(body)) return ["body"];
+  for (const k of textFields) {
+    const v = body[k];
+    if (v === undefined || v === null) continue;
+    if (typeof v === "string") continue;
+    if (typeof v === "number" && Number.isFinite(v)) continue;
+    bad.push(k);
+  }
+  for (const k of listFields) {
+    const v = body[k];
+    if (v === undefined || v === null) continue;
+    if (!Array.isArray(v) || v.some((x) => typeof x !== "string")) bad.push(k);
+  }
+  return bad;
 }
