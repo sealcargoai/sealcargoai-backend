@@ -24,7 +24,7 @@ export async function refineKeyword({ userQuery, productType, material }) {
   const productWords = (text) => text
     .replace(/["'`\n.,;:()!?¿¡]/g, " ")
     .split(/\s+/)
-    .filter((w) => w && !/\d/.test(w) && !STOP.test(w))
+    .filter((w) => w && !/\d/.test(w) && !STOP.test(w) && w.length > 1) // a unit left from "220 V" or "500 L" is not a product word
     .slice(0, 4)
     .join(" ")
     .trim();

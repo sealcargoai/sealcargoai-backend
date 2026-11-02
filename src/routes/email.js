@@ -35,7 +35,8 @@ router.post("/lead", async (req, res) => {
     if (malformedFields(req.body, ["name", "email", "query"]).length) return res.status(400).json({ error: "invalid_fields" });
     const name = clean(req.body.name, 120);
     const email = clean(req.body.email, 254);
-    const query = clean(req.body.query, 1000);
+    // the same 1,500-character limit as the page: a longer cut changed what the team read (02-11)
+    const query = clean(req.body.query, 1500);
     if (!name || !email || !query) {
       return res.status(400).json({ error: "name, email, and query are required" });
     }
@@ -183,7 +184,10 @@ router.post("/report", async (req, res) => {
       // no links or addresses in what goes into the subject and body
       supplierName: clean(b.supplierName, 200).replace(/https?:\/\/\S+|www\.\S+|\b[\w.-]+\.(?:com|net|org|io|xyz|info|top|ru|cn)\b\S*/gi, "").replace(/\s+/g, " ").trim().slice(0, 100),
       totalCost: Number(b.totalCost) || 0,
-      totalCostText: clean(b.totalCostText, 80).replace(/[^\dQUS$.,()\s]/g, "").slice(0, 60),
+      // only the amounts (no words or links); a stray separator left by the removed words is trimmed
+      totalCostText: clean(b.totalCostText, 80).replace(/[^\dQUS$.,()\s]/g, "").replace(/[\s,.;]+$/, "").slice(0, 60),
+      // 02-11: an estimate without freight is said as such (it used to arrive as «Costo total estimado: Q64,140 ,»)
+      partial: /sin flete|without freight|no freight/i.test(String(b.totalCostText || "")),
       lang: b.lang === "en" ? "en" : "es",
     });
     res.json({ success: true, delivered: result.delivered, forwarded: !!result.forwarded });

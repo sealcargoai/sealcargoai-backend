@@ -160,18 +160,21 @@ router.post("/search", async (req, res) => {
       // repeating one's own search is free; someone else's (or a rephrased) one counts
       const seenKey = `${userEmail || ip}|${cacheKey}`;
       // a cached result with no supplier to show counts nothing, as on the first run
-      if (seen.has(seenKey) || !cached.topSuppliers?.length) ticket.release();
+      const ownRepeat = seen.has(seenKey);
+      if (ownRepeat || !cached.topSuppliers?.length) ticket.release();
       else {
         seen.set(seenKey, Date.now());
         ticket.commit();
       }
-      notifySearch({
+      // 02-11: the same person repeating the same search (a retry, a reload) is not a new search:
+      // the team already got that notice, so no duplicate email
+      if (!ownRepeat) notifySearch({
         email: userEmail,
         userQuery: clean(userQuery, 1500),
         productType: clean(productType, 120),
         material: clean(material, 120),
         quantity: qty,
-        budget: bdg,
+        budget: given(budget) ? bdg : "", // only the budget the client gave (not the internal default)
         destination: clean(destination, 60),
         searchKeyword: keyword,
         qualifiedCount: cached.qualifiedCount,
@@ -257,7 +260,7 @@ router.post("/search", async (req, res) => {
       productType: clean(productType, 120),
       material: clean(material, 120),
       quantity: qty,
-      budget: bdg,
+      budget: given(budget) ? bdg : "", // only the budget the client gave (not the internal default)
       destination: clean(destination, 60),
       searchKeyword: usedKeyword,
       qualifiedCount: result.qualifiedCount,
