@@ -118,6 +118,13 @@ export async function sendLeadNotification({ name, email, query }) {
 /* ─────────────────────────────────────────────
    1️⃣b Search Lead — every successful supplier search
 ───────────────────────────────────────────── */
+// 02-11: the page sends a category KEY ("machinery", "other"…); the team reads it in Spanish
+const CATEGORY_ES = {
+  machinery: "Maquinaria / equipo", electronics: "Electrónica", textiles: "Textiles / calzado", furniture: "Muebles",
+  food: "Alimentos / bebidas", stationery: "Papelería / útiles escolares", ppe: "Equipo de protección", other: "Otro (sin categoría)",
+};
+export const categoryEs = (key) => CATEGORY_ES[String(key || "").trim().toLowerCase()] || String(key || "");
+
 export async function sendSearchLead({
   email, userQuery, productType, material, quantity, budget,
   destination, searchKeyword, qualifiedCount, topSupplier,
@@ -129,19 +136,20 @@ export async function sendSearchLead({
       : "";
 
   const content = `
-    <h2>🔎 Nueva búsqueda en SmartTrade AI</h2>
+    <h2>🔎 Búsqueda realizada en SmartTrade AI</h2>
     <table style="border-collapse:collapse;width:100%;">
       ${row("Correo", email || "sin correo")}
       ${row("Lo que busca", userQuery)}
-      ${row("Tipo de producto", productType)}
+      ${row("Categoría inferida", categoryEs(productType))}
       ${row("Material", material)}
       ${row("Cantidad", quantity)}
       ${row("Presupuesto (US$)", budget)}
-      ${row("Destino", destination)}
+      ${row("Destino", /^gt$/i.test(String(destination || "").trim()) ? "Guatemala" : destination)}
       ${row("Palabra clave usada", searchKeyword)}
-      ${row("Proveedores calificados", qualifiedCount)}
-      ${row("Mejor proveedor", topSupplier)}
+      ${row("Coincidencias que pasaron los filtros", qualifiedCount)}
+      ${row("Primera coincidencia de la lista", topSupplier)}
     </table>
+    <p style="color:#64748b;font-size:13px;">Las coincidencias son referencias de búsqueda tomadas de lo que publica la plataforma: no confirman existencia, identidad, capacidad, calidad, oferta vigente ni idoneidad del proveedor, y el orden en pantalla del cliente puede ser distinto. Aún no es una solicitud a SEAL.</p>
     <p style="color:#64748b;font-size:13px;">Responda a este correo para escribirle directo al prospecto.</p>
   `;
 
@@ -236,7 +244,7 @@ export function caseEmailHtml(lead, links, update = null) {
     <table style="border-collapse:collapse;width:100%">
       ${row("Producto", c.product)}${row("Descripción", c.description && c.description !== c.product ? c.description : "")}
       ${row("Cantidad", c.quantity)}${row("Proveedor", c.supplierName)}${row("Enlace del proveedor", c.supplierUrl)}
-      ${c.priceSource === "usuario" ? `${row("Precio indicado por el usuario", c.price)}${row("Precio publicado", c.publishedPrice)}` : (c.publishedPrice && c.publishedPrice !== c.price ? `${row("Precio usado en la estimación", c.price)}${row("Precio publicado", c.publishedPrice)}` : row("Precio publicado", c.price))}${row("Costo total estimado", c.totalCostText)}${row("Presupuesto", c.budget)}
+      ${c.priceSource === "usuario" ? `${row("Precio indicado por el usuario", c.price)}${row("Precio publicado", c.publishedPrice)}` : (c.publishedPrice && c.publishedPrice !== c.price ? `${row("Precio usado en la estimación", c.price)}${row("Precio publicado", c.publishedPrice)}` : row("Precio publicado", c.price))}${row(/sin flete/i.test(String(c.totalCostText || "")) ? "Costo estimado preliminar (sin flete)" : "Costo estimado preliminar", c.totalCostText)}${row("Presupuesto", c.budget)}
       ${row("Destino", c.destination)}${row("Informe del cliente", c.caseRef)}
     </table>
     ${c.message ? `<h3 style="margin:18px 0 6px;color:#0B3C5D">Mensaje del cliente</h3><p style="margin:0;white-space:pre-line">${e(c.message)}</p>` : ""}
@@ -325,6 +333,7 @@ export async function sendReportToUser({
   totalCostText,
   requesterEmail,
   lang = "es",
+  partial = false,
 }) {
   const resend = getResendClient();
   const en = lang === "en";
@@ -339,17 +348,17 @@ export async function sendReportToUser({
   const content = en
     ? `
     <h2>📄 Your import report</h2>
-    <p>Hello ${e(recipientName || "")}</p>
+    <p>Hello${recipientName ? ` ${e(recipientName)}` : ""},</p>
     ${supplierName ? `<p>Supplier: ${e(supplierName)}</p>` : ""}
-    <p>Estimated total cost: ${total}</p>
+    <p>${partial ? "Preliminary estimated cost, without freight" : "Preliminary estimated cost"}: ${total}</p>
     ${other ? `<p>Sent at the request of: ${e(requesterEmail)}</p>` : ""}
     <p style="color:#64748b;font-size:12px">This is a preliminary estimate based on information published by the platform; it is not a quote nor a verification of the supplier.</p>
   `
     : `
     <h2>📄 Su informe de importación</h2>
-    <p>Hola ${e(recipientName || "")}</p>
+    <p>Hola${recipientName ? ` ${e(recipientName)}` : ""}:</p>
     ${supplierName ? `<p>Proveedor: ${e(supplierName)}</p>` : ""}
-    <p>Costo total estimado: ${total}</p>
+    <p>${partial ? "Costo estimado preliminar, sin flete" : "Costo estimado preliminar"}: ${total}</p>
     ${other ? `<p>Enviado a solicitud de: ${e(requesterEmail)}</p>` : ""}
     <p style="color:#64748b;font-size:12px">Es una estimación preliminar con información publicada por la plataforma; no es una cotización ni una verificación del proveedor.</p>
   `;
