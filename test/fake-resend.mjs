@@ -15,8 +15,11 @@ globalThis.fetch = async (url, opt = {}) => {
     if (process.env.RESEND_FAIL === "1") return json({ name: "validation_error", message: "fake failure", statusCode: 422 }, 422);
     // RESEND_FAIL_TO=<regex>: refuse only the sends whose «to» matches (e.g. an unverified recipient)
     if (process.env.RESEND_FAIL_TO) {
-      const to = [].concat(JSON.parse(opt.body).to || []).join(",");
-      if (new RegExp(process.env.RESEND_FAIL_TO, "i").test(to)) return json({ name: "validation_error", message: "fake recipient refused", statusCode: 422 }, 422);
+      const msg = JSON.parse(opt.body);
+      const to = [].concat(msg.to || []).join(",");
+      // RESEND_FAIL_SUBJECT=<regex> (optional): only those messages (e.g. the report, not the verification code)
+      const subjectOk = !process.env.RESEND_FAIL_SUBJECT || new RegExp(process.env.RESEND_FAIL_SUBJECT, "i").test(String(msg.subject || ""));
+      if (subjectOk && new RegExp(process.env.RESEND_FAIL_TO, "i").test(to)) return json({ name: "validation_error", message: "fake recipient refused", statusCode: 422 }, 422);
     }
     fs.appendFileSync(process.env.MAIL_LOG, opt.body + "\n");
     return json({ id: `fake-${process.pid}-${++n}` });

@@ -8,6 +8,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { server } from "./fixtures/qa-server.mjs";
+import { verifyEmail } from "./fixtures/verify.mjs";
 
 const QA_ENV = {
   QA_EMAILS: "qa1@prueba.test,juan+qa@empresa-cliente.gt,ka@prueba.test,qa.workspace@seal-workspace.test,Ana.QA+informes@Gmail.com",
@@ -78,13 +79,14 @@ test("servidor · cliente real cuya dirección es la base de un alias QA: consul
   assert.equal((await S.post("/api/email/lead", { name: "Juan", email: "juan@empresa-cliente.gt", query: "Sillas plásticas apilables para eventos" }, "10.8.1.1")).status, 200);
   const s = await search("juan@empresa-cliente.gt", "10.8.1.2");
   assert.equal(s.status, 200);
-  const tok = (await s.json()).reportToken;
   await wait(300);
   const q = await (await S.post("/api/email/quote", { name: "Juan", email: "juan@empresa-cliente.gt", product: "Sillas plásticas" }, "10.8.1.3")).json();
   assert.equal(q.test, false, "el caso no se marca como prueba");
-  const r = await S.post("/api/email/report", { recipientEmail: "gerencia@empresa-cliente.gt", requesterEmail: "juan@empresa-cliente.gt", reportToken: tok, lang: "es" }, "10.8.1.4");
+  // 02-11k: the report goes to the requester's own verified mailbox
+  const v = await verifyEmail(S, "juan@empresa-cliente.gt", "10.8.1.4");
+  const r = await S.post("/api/email/report", { requesterEmail: "juan@empresa-cliente.gt", reportGrant: v.reportGrant, lang: "es" }, "10.8.1.4");
   assert.deepEqual(await r.json(), { success: true, delivered: true, forwarded: false });
-  const sent = S.attempts().slice(n);
+  const sent = S.attempts().slice(n).filter((m) => !/código de verificación/i.test(m.subject));
   assert.equal(sent.length, 4, "consulta, búsqueda, caso, informe");
   for (const m of sent) {
     assert.doesNotMatch(m.subject, /PRUEBA/, m.subject);
@@ -98,7 +100,9 @@ test("servidor · la dirección base tiene el límite normal de búsquedas; el a
   for (let i = 0; i < 4; i++) codes.push((await search("juan@empresa-cliente.gt", `10.8.2.${i + 1}`, PRODUCTS[i])).status);
   // one search was already used in the previous test: 2 more pass, then the limit (3) applies
   assert.deepEqual(codes, [200, 200, 429, 429]);
-  for (let i = 0; i < 5; i++) assert.equal((await search("juan+qa@empresa-cliente.gt", `10.8.3.${i + 1}`, PRODUCTS[i])).status, 200);
+  // 02-11k: the QA alias skips the limit only with a verified session of that address
+  const v = await verifyEmail(S, "juan+qa@empresa-cliente.gt", "10.8.3.9");
+  for (let i = 0; i < 5; i++) assert.equal((await S.post("/api/suppliers/search", { productType: "machinery", userQuery: PRODUCTS[i], quantity: "4", userEmail: "juan+qa@empresa-cliente.gt", verifiedSession: v.session }, `10.8.3.${i + 1}`)).status, 200);
 });
 
 test("servidor · el alias QA expreso sí queda aislado (solo destinos QA)", async () => {

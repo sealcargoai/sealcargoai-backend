@@ -5,6 +5,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { server } from "./fixtures/qa-server.mjs";
+import { verifyEmail } from "./fixtures/verify.mjs";
 
 const OK = server(5100, { QA_LEADS_EMAIL: "qa-inbox@example.test" });
 const MISSING = server(5300, {});
@@ -54,19 +55,21 @@ test("cuenta QA permitida (en cualquier mayúscula; 02-11i: un alias «+» no li
   await wait(300);
   const q = await (await OK.post("/api/email/quote", { name: "Ana", email: "qa1@prueba.test", product: "Sillas plásticas" }, "10.1.0.3")).json();
   assert.equal(q.test, true);
-  // 02-11e: a QA account can't send its report to an outside address (it used to go there with QA in BCC)
-  const ext = await OK.post("/api/email/report", { recipientEmail: "otra.persona@empresa.gt", requesterEmail: "qa1@prueba.test", reportToken: s.reportToken, totalCostText: "Q1,000.00", lang: "es" }, "10.1.0.3");
+  void s;
+  // 02-11k: the report needs proof of control of the address (a code) and goes only to that address
+  const v = await verifyEmail(OK, "qa1@prueba.test", "10.1.0.3");
+  const ext = await OK.post("/api/email/report", { recipientEmail: "otra.persona@empresa.gt", requesterEmail: "qa1@prueba.test", reportGrant: v.reportGrant, totalCostText: "Q1,000.00", lang: "es" }, "10.1.0.3");
   assert.equal(ext.status, 403);
-  assert.deepEqual(await ext.json(), { error: "qa_recipient_not_allowed" });
-  const r = await OK.post("/api/email/report", { recipientEmail: "qa1@prueba.test", requesterEmail: "qa1@prueba.test", reportToken: s.reportToken, totalCostText: "Q1,000.00", lang: "es" }, "10.1.0.3");
+  assert.equal((await ext.json()).error, "recipient_must_be_requester");
+  const r = await OK.post("/api/email/report", { recipientEmail: "qa1@prueba.test", requesterEmail: "qa1@prueba.test", reportGrant: v.reportGrant, totalCostText: "Q1,000.00", lang: "es" }, "10.1.0.3");
   assert.equal(r.status, 200);
-  const m = OK.mails().slice(n);
+  const m = OK.mails().slice(n).filter((x) => !/código de verificación/i.test(x.subject));
   assert.equal(m.length, 4);
   assert.match(m[0].subject, /^\[PRUEBA\] Consulta iniciada \(aún sin solicitud\)/);
   assert.match(m[1].subject, /^\[PRUEBA\] Búsqueda:/);
   assert.match(m[2].subject, new RegExp(`^\\[PRUEBA\\] Caso ${q.id}`));
   for (const x of m.slice(0, 3)) assert.deepEqual(x.to, QA_TO);
-  assert.match(m[3].subject, /^Su informe SEAL/);
+  assert.match(m[3].subject, /^Su estimación preliminar/);
   assert.equal(m[3].to, "qa1@prueba.test");
   assert.deepEqual(m[3].bcc, QA_TO);
   for (const x of m) assert.ok(![].concat(x.to, x.bcc || []).some((a) => /ventas@/.test(a)), "nunca a ventas");
@@ -86,10 +89,13 @@ test("buzón QA ausente: la prueba no se envía a nadie y se rechaza (503); lo r
   // the QA search still works for the tester, but its notice is not sent anywhere
   const s = await search(MISSING, "qa1@prueba.test", "10.2.0.1", "sillas plásticas apilables para eventos");
   assert.equal(s.status, 200);
-  const tok = (await s.json()).reportToken;
-  assert.equal((await MISSING.post("/api/email/report", { recipientEmail: "qa1@prueba.test", requesterEmail: "qa1@prueba.test", reportToken: tok, lang: "es" }, "10.2.0.1")).status, 503);
+  // (the verification code goes to the QA account itself, never to an inbox; it is not a test record)
+  const v = await verifyEmail(MISSING, "qa1@prueba.test", "10.2.0.1");
+  const afterCode = MISSING.mails().length;
+  assert.equal((await MISSING.post("/api/email/report", { requesterEmail: "qa1@prueba.test", reportGrant: v.reportGrant, lang: "es" }, "10.2.0.1")).status, 503);
   await wait(300);
-  assert.equal(MISSING.mails().length, n, "ningún correo de prueba salió");
+  assert.equal(afterCode, n + 1, "solo el código, al propio buzón QA");
+  assert.equal(MISSING.mails().length, afterCode, "ningún correo de prueba salió");
   assert.match(MISSING.logs, /QA_ROUTING_UNAVAILABLE/);
   // a real client is unaffected
   await MISSING.post("/api/email/quote", { name: "Lucía", email: "lucia@importadora.gt", product: "Sillas" }, "10.2.0.2");
@@ -109,9 +115,10 @@ test("un caso registrado antes con otra clasificación se reclasifica al actuali
   const base = { contact: { name: "Demo SA", email: "compras@demo.gt" }, case: { product: "Sillas" }, source: "chat", requestType: "x" };
   const first = registerLead({ ...base, test: true });
   assert.equal(first.lead.test, true);
-  const again = registerLead({ ...base, case: { product: "Sillas", quantity: "10" }, test: false });
+  // (02-11k: an update needs proof of control of the case: authorized here)
+  const again = registerLead({ ...base, case: { product: "Sillas", quantity: "10" }, test: false }, Date.now(), { authorized: true });
   assert.equal(again.duplicate, true);
   assert.equal(again.lead.test, false, "real again: goes to sales");
-  const qa = registerLead({ ...base, test: true });
+  const qa = registerLead({ ...base, test: true }, Date.now(), { authorized: true });
   assert.equal(qa.lead.test, true);
 });

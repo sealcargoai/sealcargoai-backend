@@ -3,6 +3,7 @@
 // la búsqueda de Alibaba es un fixture ficticio (test/fixtures). Nada sale de esta máquina.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { verifyEmail } from "./fixtures/verify.mjs";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
@@ -26,6 +27,8 @@ function server(portBase, extraEnv = {}) {
           QA_LEADS_EMAIL: "qa-inbox@example.test",
           QA_NOTIFY_EMAILS: "qa-dev@example.test",
           QA_EMAILS: "qa1@prueba.test,qa2@prueba.test", // 02-11e: a QA report goes only to a QA account
+          VERIFY_MAX_PER_ADDRESS_HOUR: "100",
+          VERIFY_MAX_PER_IP_HOUR: "1000",
           ADMIN_EMAIL: "",
           ADMIN2_EMAIL: "",
           PUBLIC_API_URL: "",
@@ -133,23 +136,24 @@ test("aviso de consulta iniciada: conserva la descripción completa hasta 1,500 
 });
 
 test("informe por correo: una estimación sin flete se dice así, sin coma suelta", async () => {
-  const r0 = await S.post("/api/suppliers/search", { ...SEARCH, userEmail: "qa1@prueba.test", userQuery: "compresores de tornillo industriales 220 V tanque 500 litros" }, "10.0.0.4");
-  const j = await r0.json();
-  assert.ok(j.reportToken);
+  // 02-11k: the report goes to the requester's own mailbox, proved with a code
+  const v = await verifyEmail(S, "qa1@prueba.test", "10.0.0.4");
   const before0 = S.mails().length;
   const r = await S.post(
     "/api/email/report",
-    { recipientEmail: "qa2@prueba.test", requesterEmail: "qa1@prueba.test", reportToken: j.reportToken, supplierName: "[PRUEBA] Ficticia", totalCostText: "Q64,140 (US$8,119), sin flete", lang: "es" },
+    { requesterEmail: "qa1@prueba.test", reportGrant: v.reportGrant, supplierName: "[PRUEBA] Ficticia", totalCostText: "Q64,140 (US$8,119), sin flete", lang: "es" },
     "10.0.0.4",
   );
   assert.equal(r.status, 200);
   const m = S.mails()
     .slice(before0)
-    .find((x) => /Su informe SEAL/.test(x.subject));
+    .find((x) => /Su estimación preliminar/.test(x.subject));
   const t = plain(m.html);
-  assert.match(t, /Costo estimado preliminar, sin flete: Q64,140 \(US\$8,119\) /);
+  assert.match(t, /Costo estimado preliminar, sin flete \(cifra de la herramienta\): Q64,140 \(US\$8,119\) /);
   assert.doesNotMatch(t, /Costo total estimado|\) ,/);
   assert.match(t, /Hola:/, "sin nombre no queda «Hola » colgando");
+  assert.match(t, /SEAL no lo revisó ni lo valida/);
+  assert.equal(m.to, "qa1@prueba.test");
   assert.deepEqual(m.bcc, ["qa-inbox@example.test", "qa-dev@example.test"]);
 });
 

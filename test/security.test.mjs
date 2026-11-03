@@ -145,7 +145,9 @@ test("rate limits: requests to SEAL and funnel events from one connection are ca
 test("parallel identical sends make one case and one email (no race duplicates)", async () => {
   const before = mails().length;
   const rs = await Promise.all(Array.from({ length: 8 }, (_, i) => post("/api/email/quote", { name: "Par", email: "par@empresa.gt", product: "Paralelo" }, { "x-real-ip": `10.88.0.${i + 1}` })));
-  const ids = new Set(await Promise.all(rs.map(async (r) => (await r.json()).id)));
-  assert.equal(ids.size, 1);
+  const js = await Promise.all(rs.map((r) => r.json()));
+  // one case created; every other identical send is a repeat that changes nothing (02-11k: no case number)
+  assert.equal(js.filter((j) => j.id && !j.duplicate).length, 1);
+  assert.equal(js.filter((j) => j.duplicate && j.unchanged).length, 7);
   assert.equal(mails().length, before + 1);
 });

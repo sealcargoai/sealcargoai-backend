@@ -10,6 +10,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { server } from "./fixtures/qa-server.mjs";
+import { verifyEmail } from "./fixtures/verify.mjs";
 
 const QA_ENV = {
   QA_EMAILS: "ka@prueba.test,qa1@prueba.test,ana.qa@gmail.com,qa.ws@seal-workspace.test,juan+qa@empresa-cliente.gt",
@@ -19,7 +20,7 @@ const QA_ENV = {
   QA_NOTIFY_EMAILS: "qa-dev@example.test",
 };
 Object.assign(process.env, { ADMIN_EMAIL: "", ADMIN2_EMAIL: "", ...QA_ENV });
-const { normalizeEmail, emailKey, identityKey, isQa, reportToken } = await import("../src/services/quotaStore.js");
+const { normalizeEmail, emailKey, identityKey, isQa } = await import("../src/services/quotaStore.js");
 const { isEmail } = await import("../src/middleware/security.js");
 
 // look-alikes of «ka@prueba.test» (each a DIFFERENT mailbox, or not a valid ASCII address at all)
@@ -52,29 +53,29 @@ test("enumeración · el único carácter no ASCII que toLowerCase() convierte e
     assert.equal(identityKey(addr), "");
     assert.equal(isEmail(addr), false);
     assert.equal(isQa(addr), false);
-    assert.equal(reportToken(addr), "");
+    assert.equal(identityKey(addr), "");
   }
 });
 
-test("tabla · las variantes parecidas no son la cuenta QA ni comparten su token ni su clave", () => {
+test("tabla · las variantes parecidas no son la cuenta QA ni comparten su identidad ni su clave", () => {
   assert.equal(isQa("ka@prueba.test"), true);
-  const tok = reportToken("ka@prueba.test");
+  const tok = identityKey("ka@prueba.test");
   for (const [addr, why] of LOOKALIKES) {
     assert.equal(isEmail(addr), false, why);
     assert.equal(isQa(addr), false, why);
     assert.equal(emailKey(addr), "", `cuota: ${why}`);
-    assert.notEqual(reportToken(addr), tok, why);
+    assert.notEqual(identityKey(addr), tok, why);
   }
 });
 
-test("tabla · el token se liga a la identidad exacta (no a la clave de cuotas); Gmail sí, Workspace no", () => {
+test("tabla · la identidad (autorización) es el buzón exacto (no a la clave de cuotas); Gmail sí, Workspace no", () => {
   assert.equal(emailKey("qa1+x@prueba.test"), emailKey("qa1@prueba.test"), "(cuotas: amplia, intencional)");
-  assert.notEqual(reportToken("qa1+x@prueba.test"), reportToken("qa1@prueba.test"));
-  assert.notEqual(reportToken("k.a@prueba.test"), reportToken("ka@prueba.test"));
-  assert.equal(reportToken(" KA@Prueba.Test "), reportToken("ka@prueba.test"), "mayúsculas y espacios: el mismo buzón");
-  assert.equal(reportToken("a.n.a.q.a+z@googlemail.com"), reportToken("ana.qa@gmail.com"), "Gmail: regla de Google");
-  assert.notEqual(reportToken("qaws@seal-workspace.test"), reportToken("qa.ws@seal-workspace.test"), "Workspace: los puntos cuentan");
-  assert.notEqual(reportToken("qa.ws+x@seal-workspace.test"), reportToken("qa.ws@seal-workspace.test"), "Workspace: el «+» cuenta");
+  assert.notEqual(identityKey("qa1+x@prueba.test"), identityKey("qa1@prueba.test"));
+  assert.notEqual(identityKey("k.a@prueba.test"), identityKey("ka@prueba.test"));
+  assert.equal(identityKey(" KA@Prueba.Test "), identityKey("ka@prueba.test"), "mayúsculas y espacios: el mismo buzón");
+  assert.equal(identityKey("a.n.a.q.a+z@googlemail.com"), identityKey("ana.qa@gmail.com"), "Gmail: regla de Google");
+  assert.notEqual(identityKey("qaws@seal-workspace.test"), identityKey("qa.ws@seal-workspace.test"), "Workspace: los puntos cuentan");
+  assert.notEqual(identityKey("qa.ws+x@seal-workspace.test"), identityKey("qa.ws@seal-workspace.test"), "Workspace: el «+» cuenta");
 });
 
 // ── servidor ────────────────────────────────────────────────────────────────────────────────
@@ -87,20 +88,15 @@ const QA_DEST = new Set(["qa-inbox@example.test", "qa-dev@example.test"]);
 let n = 0;
 const ip = () => `10.9.${Math.floor(n / 200)}.${(n++ % 200) + 1}`;
 const search = (email, q = "sillas plásticas apilables para eventos") => S.post("/api/suppliers/search", { productType: "machinery", userQuery: q, quantity: "4", userEmail: email }, ip());
-async function token(email, q) {
-  const r = await search(email, q);
-  assert.equal(r.status, 200, email);
-  const t = (await r.json()).reportToken;
-  assert.ok(t, `token para ${email}`);
-  await wait(250);
-  return t;
-}
+// 02-11k: a report grant = proof of control of the address (code) — one use
+const grant = async (email) => (await verifyEmail(S, email, ip())).reportGrant;
 const report = (body) => S.post("/api/email/report", { totalCostText: "Q1,000.00", lang: "es", ...body }, ip());
 
 test("servidor · una cuenta QA ASCII sigue enviando consulta, búsqueda y caso solo a destinos QA", async () => {
   const k = S.attempts().length;
   assert.equal((await S.post("/api/email/lead", { name: "QA", email: "ka@prueba.test", query: "Sillas plásticas apilables para eventos" }, ip())).status, 200);
-  await token("ka@prueba.test");
+  assert.equal((await search("ka@prueba.test")).status, 200);
+  await wait(250);
   const q = await (await S.post("/api/email/quote", { name: "QA", email: "ka@prueba.test", product: "Sillas plásticas" }, ip())).json();
   assert.equal(q.test, true);
   const sent = S.attempts().slice(k);
@@ -144,50 +140,54 @@ test("servidor · cliente real con correo Unicode: error claro antes de cualquie
   assert.doesNotMatch(m[0].subject, /PRUEBA/);
 });
 
-test("servidor · el token de ka@ no sirve con variantes parecidas, con alias, con puntos ni para otra cuenta QA", async () => {
-  const tok = await token("ka@prueba.test", "mesas plegables de plástico");
+test("servidor · la autorización de ka@ no sirve con variantes parecidas, alias, puntos ni para otra cuenta; tampoco repetida", async () => {
+  const g = await grant("ka@prueba.test");
   const k = S.attempts().length;
   for (const [requester, status] of [
-    ["Ka@prueba.test", 400],
-    ["kа@prueba.test", 400],
-    ["k​a@prueba.test", 400],
+    ["\u212Aa@prueba.test", 400],
+    ["k\u0430@prueba.test", 400],
+    ["k\u200Ba@prueba.test", 400],
     ["ka+x@prueba.test", 403],
     ["k.a@prueba.test", 403],
     ["qa1@prueba.test", 403],
   ]) {
-    const r = await report({ recipientEmail: "ka@prueba.test", requesterEmail: requester, reportToken: tok });
+    const r = await report({ requesterEmail: requester, reportGrant: g });
     assert.equal(r.status, status, JSON.stringify(requester));
   }
   assert.equal(S.attempts().length, k, "Resend no fue llamado");
-  // the same mailbox in other case still is the same identity
-  assert.equal((await report({ recipientEmail: "ka@prueba.test", requesterEmail: "KA@Prueba.Test", reportToken: tok })).status, 200);
+  // the same mailbox in other case is the same identity; the grant works ONCE
+  assert.equal((await report({ requesterEmail: "KA@Prueba.Test", reportGrant: g })).status, 200);
+  const again = await report({ requesterEmail: "ka@prueba.test", reportGrant: g });
+  assert.equal(again.status, 403, "repetición rechazada");
+  assert.equal((await again.json()).error, "report_not_allowed");
 });
 
-test("servidor · una cuenta QA no saca informes afuera con mayúsculas, alias, token ajeno ni PDF; se rechaza antes de límites, PDF y Resend", async () => {
-  const own = await token("qa1@prueba.test", "carpas para eventos 3x3");
-  // 02-11i: «qa1+x@» is NOT a QA account (not listed): its token exists, but it is another identity
-  const alias = await token("qa1+x@prueba.test", "carpas para eventos 3x3");
-  const kaTok = await token("ka@prueba.test", "manteles de poliéster");
+test("servidor · una cuenta QA no saca informes afuera con mayúsculas, alias, autorización ajena ni PDF; se rechaza antes de límites, PDF y Resend", async () => {
+  const own = await grant("qa1@prueba.test");
+  const alias = await grant("qa1+x@prueba.test");
+  const kaG = await grant("ka@prueba.test");
   const k = S.attempts().length;
   const bad = Buffer.from("esto no es un PDF").toString("base64");
-  for (const [requester, tk, want] of [
-    ["qa1@prueba.test", own, "qa_recipient_not_allowed"],
-    ["QA1@PRUEBA.TEST", own, "qa_recipient_not_allowed"],
-    ["qa1@prueba.test", kaTok, "report_not_allowed"],
-    ["qa1@prueba.test", alias, "report_not_allowed"],
+  for (const [requester, g, want] of [
+    ["qa1@prueba.test", own, "recipient_must_be_requester"],
+    ["QA1@PRUEBA.TEST", own, "recipient_must_be_requester"],
+    ["qa1@prueba.test", kaG, "recipient_must_be_requester"],
+    ["qa1@prueba.test", alias, "recipient_must_be_requester"],
   ]) {
     for (const to of ["cliente@empresa.gt", "ventas@example.test", "VENTAS+x@example.test", "qa1+otra@prueba.test"]) {
-      const r = await report({ recipientEmail: to, requesterEmail: requester, reportToken: tk, pdfBase64: bad });
+      const r = await report({ recipientEmail: to, requesterEmail: requester, reportGrant: g, pdfBase64: bad });
       assert.equal(r.status, 403, `${requester} → ${to}`);
       assert.equal((await r.json()).error, want, `${requester} → ${to} (el PDF inválido no llegó a revisarse)`);
     }
   }
-  for (const to of ["no-es-correo", "a@b", "Ka@prueba.test"])
-    assert.equal((await report({ recipientEmail: to, requesterEmail: "qa1@prueba.test", reportToken: own })).status, 400, to);
+  for (const g of [kaG, alias]) assert.equal((await report({ requesterEmail: "qa1@prueba.test", reportGrant: g })).status, 403, "autorización de otra identidad");
+  for (const to of ["no-es-correo", "a@b", "\u212Aa@prueba.test"])
+    assert.ok([400, 403].includes((await report({ recipientEmail: to, requesterEmail: "qa1@prueba.test", reportGrant: own })).status), to);
   assert.equal(S.attempts().length, k, "Resend no fue llamado");
-  // limits untouched: 3 reports to the QA account still pass, the 4th hits the per-recipient cap
-  for (let i = 0; i < 3; i++) assert.equal((await report({ recipientEmail: "qa1@prueba.test", requesterEmail: "qa1@prueba.test", reportToken: own })).status, 200);
-  assert.equal((await report({ recipientEmail: "qa1@prueba.test", requesterEmail: "qa1@prueba.test", reportToken: own })).status, 429);
+  // limits untouched: 3 reports to the QA account still pass (a grant each), the 4th hits the cap
+  assert.equal((await report({ requesterEmail: "qa1@prueba.test", reportGrant: own })).status, 200);
+  for (let i = 0; i < 2; i++) assert.equal((await report({ requesterEmail: "qa1@prueba.test", reportGrant: await grant("qa1@prueba.test") })).status, 200);
+  assert.equal((await report({ requesterEmail: "qa1@prueba.test", reportGrant: await grant("qa1@prueba.test") })).status, 429);
 });
 
 test("servidor · el caso de un alias QA no se fusiona con el de la dirección base (cliente real) ni lo reclasifica", async () => {
@@ -197,18 +197,22 @@ test("servidor · el caso de un alias QA no se fusiona con el de la dirección b
   const b = await (await S.post("/api/email/quote", { ...body, email: "juan+qa@empresa-cliente.gt" }, ip())).json();
   assert.deepEqual([b.duplicate, b.test], [false, true], "caso QA aparte");
   assert.notEqual(b.id, a.id);
-  const c = await (await S.post("/api/email/quote", { ...body, email: "juan@empresa-cliente.gt" }, ip())).json();
+  // the owner of the real case updates it with its case token: still real, same case
+  const caseAuth = [`${a.id}:${new URL(a.caseUrl).searchParams.get("t")}`];
+  const c = await (await S.post("/api/email/quote", { ...body, email: "juan@empresa-cliente.gt", caseAuth }, ip())).json();
   assert.deepEqual([c.duplicate, c.test, c.id], [true, false, a.id], "el caso real sigue real");
 });
 
 test("servidor · un cliente real ASCII: consulta, búsqueda, caso e informe por el flujo comercial (sin cambios)", async () => {
   const k = S.attempts().length;
   await S.post("/api/email/lead", { name: "Lucía", email: "lucia@importadora.gt", query: "Sillas plásticas apilables para eventos" }, ip());
-  const tok = await token("lucia@importadora.gt", "sillas tiffany de resina");
+  assert.equal((await search("lucia@importadora.gt", "sillas tiffany de resina")).status, 200);
+  await wait(250);
   await S.post("/api/email/quote", { name: "Lucía", email: "lucia@importadora.gt", product: "Sillas tiffany" }, ip());
-  const r = await report({ recipientEmail: "Gerencia@Importadora.gt", requesterEmail: "lucia@importadora.gt", reportToken: tok });
+  const g = await grant("Lucia@Importadora.gt");
+  const r = await report({ requesterEmail: "lucia@importadora.gt", reportGrant: g });
   assert.deepEqual(await r.json(), { success: true, delivered: true, forwarded: false });
-  const sent = S.attempts().slice(k);
+  const sent = S.attempts().slice(k).filter((m) => !/código de verificación/i.test(m.subject));
   assert.equal(sent.length, 4);
   for (const m of sent) {
     assert.doesNotMatch(m.subject, /PRUEBA/);
