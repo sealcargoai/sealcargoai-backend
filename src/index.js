@@ -70,7 +70,7 @@ app.get("/", (_req, res) => {
 });
 
 // the version actually running (the commit Railway built), to tell which code a test hit
-export const BACKEND_VERSION = "2026.11.02-h";
+export const BACKEND_VERSION = "2026.11.02-i";
 app.get("/health", (_req, res) => {
   res.json({
     status:          "ok",
