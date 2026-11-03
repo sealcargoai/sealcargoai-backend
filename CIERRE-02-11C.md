@@ -205,3 +205,47 @@ Versión `2026.11.02-j`. Pruebas: `test/auditoria-02-11j.test.mjs` (7). Con el c
 - El token de administración se compara como SHA-256: un token no ASCII del mismo largo daba 500 y revelaba el largo.
 - Un entorno de Railway que no es producción enlaza a sí mismo (`RAILWAY_PUBLIC_DOMAIN`).
 - Fuera de alcance, ya existía antes: en un repetido, los datos del caso (mensaje, cantidad, presupuesto) se siguen actualizando con lo que llegue. Es la función de actualizar el caso; cambiarlo requiere identificar al cliente.
+
+## 02-11k — prueba de control del correo, casos repetidos, QA y eventos
+
+Versión `2026.11.02-k`. Pruebas nuevas en `test/verificacion-02-11k.test.mjs` (11). Las pruebas anteriores se migraron al nuevo contrato.
+
+| Sev. | Defecto | Corrección |
+|---|---|---|
+| Crítica | `reportToken` era un HMAC determinista del correo y lo entregaba cualquier búsqueda hecha con ese correo. Quien escribiera el correo de otra persona obtenía la autorización para mandarle informes con la marca de SEAL | La búsqueda ya no entrega token. Para enviar un informe hay que pedir un código de 6 dígitos a ese buzón (`POST /api/email/verify/start`) y confirmarlo (`/verify/confirm`). El servidor genera tokens aleatorios, guarda solo su hash y los liga a la identidad exacta. La autorización del informe (`reportGrant`) dura 30 minutos y sirve una sola vez. El código vence a los 15 minutos y se anula tras 5 intentos fallidos. Hay un tope de códigos por dirección (3/hora) y por IP (10/hora). A las direcciones comerciales de SEAL no se les envía código |
+| Alta | Un informe podía ir a un tercero, con un PDF y unos datos generados por el navegador, presentado como documento de SEAL | El informe solo va al buzón verificado del solicitante; otro destinatario recibe 403 `recipient_must_be_requester`. El nombre libre se ignora. El asunto es fijo, el adjunto se llama `SmartTrade_estimacion_preliminar_*.pdf` y el correo dice que el PDF se generó en el navegador con datos del usuario, que SEAL no lo revisó ni lo valida y que es una orientación preliminar, no una cotización ni una verificación |
+| Alta | Un envío repetido (mismo correo y producto) modificaba los datos del caso (mensaje, cantidad, presupuesto) y avisaba a SEAL con esos cambios | Sin el token del caso (`caseAuth: ["ID:token"]`, el parámetro `t` del enlace firmado que recibió el cliente al crearlo) no cambia nada: no hay número, ni enlace, ni correo de actualización. Solo si el correo original a SEAL había fallado, se reintenta ese mismo correo sin cambios. Con el token, el titular actualiza sin duplicar. El navegador guarda los tokens de sus casos; desde otro navegador, el cliente actualiza por WhatsApp con su número de caso |
+| Alta | Bastaba escribir una dirección QA para quedar sin límite de búsquedas | La exención requiere una sesión verificada de esa misma dirección (`verifiedSession`), también en el limitador por IP. Sin sesión, QA tiene los límites normales y su enrutamiento sigue yendo solo a QA, nunca a ventas |
+| Media | `/api/events` contaba como conversión el `solicitud_enviada` enviado por cualquier navegador, sin tope | Los clientes ya no pueden enviar `solicitud_enviada`: el servidor lo registra al crear un caso que no es de prueba. Los demás eventos tienen un tope de 40 por IP al día. La página del embudo aclara que la parte alta es aproximada |
+| Baja | Mensajes | Los errores de código, límite y autorización vencida explican qué hacer y no muestran direcciones, tokens ni datos del caso |
+
+**Validación de que las vulnerabilidades no vuelven (mutaciones, cada una hace fallar al menos una prueba):**
+- Validar y consumir la autorización eliminados.
+- Consumo sin borrar (repetición).
+- Chequeo de destinatario quitado.
+- Repetido sin token que modifica el caso.
+- QA sin sesión que salta límites.
+- Conversión aceptada desde el navegador.
+- Sin tope por IP.
+- La búsqueda vuelve a dar `reportToken`.
+
+**Pendiente o no verificable:**
+- El tope por IP confía en `X-Real-IP` del edge de Railway, sin verificar en producción.
+- Sesiones, códigos y autorizaciones viven en memoria: un despliegue los invalida, y el cliente pide otro código.
+- El PDF se sigue generando en el navegador. Ya no se presenta como validado y solo llega a su autor.
+- Cualquiera puede pedir un código para una dirección ajena. Lo recibe solo su dueño y hay un límite de 3 por hora. Con eso, un tercero puede agotar ese cupo o, con 10 códigos equivocados, bloquear la verificación de esa dirección por un día. El dueño puede seguir descargando el PDF o escribir por WhatsApp.
+- El correo verificado recibe un PDF hecho por su navegador desde una dirección de SEAL, y podría reenviarlo con la firma DKIM intacta. El texto, el asunto y el nombre del adjunto dicen que no lo valida SEAL. La solución completa es generar el PDF en el servidor; se deja como siguiente paso.
+- La respuesta a un repetido sin token (sin número de caso) deja inferir que existe un caso abierto con ese correo y producto. Es baja: no revela datos del caso.
+- La entrega real de correos no se comprobó en producción (pruebas con Resend simulado). La verificación depende de que `RESEND_FROM` en producción sea un dominio verificado; no lo cambié ni lo revisé desde aquí.
+
+**Revisión independiente, corregido:**
+- Un pedido de código de un tercero ya no anula el del titular (hasta 3 códigos pendientes).
+- Los fallos se limitan a 10 por dirección y día.
+- Un código que no se pudo enviar no consume el cupo.
+- `/quota` acepta la sesión QA en el encabezado `X-Verified-Session` (antes, el formulario detenía a la cuenta QA verificada).
+- La respuesta a un repetido sin token es siempre `{success, duplicate, unchanged}`, sin `notified`.
+- `/verify/*` tiene su propio limitador, separado del de casos e informes.
+
+**Revisión independiente, sin cambiar:**
+- La autorización se consume aunque el envío falle; el cliente pide otro código.
+- El tope de 40 eventos por IP al día puede subcontar detrás de NAT de operador.
