@@ -78,3 +78,57 @@ Comprobación de mutaciones (cambiando solo `quotaStore.js`, con las pruebas tal
 - con la clasificación amplia de alias, fallan 3 (B, flujo comercial y límite).
 
 Tamaño del build: el aviso de más de 500 kB viene de `reportExports` (ExcelJS, 1,055 KB) y `costPdf` (jsPDF, 418 KB). Los dos se cargan solo al exportar. El paquete inicial (`index`, 591 KB, 196 KB gzip) incluye el chat porque el formulario de calificación lo usa. Separarlo no mejora la ruta principal y amplía el alcance, así que no se cambió.
+
+## 02-11h — identidad de correo segura (clasificación QA, búsqueda, token, destinatario)
+
+Versión `2026.11.02-h`.
+
+**Causa raíz.**
+- `isEmail()` y `normalizeEmail()` aceptaban Unicode, y `toLowerCase()` pliega el signo Kelvin (U+212A) a `k`. Así, `Ka@prueba.test` se volvía `ka@prueba.test`: se clasificaba como esa cuenta QA (el lead iba como `[PRUEBA]` al buzón QA y no a ventas) y compartía su búsqueda y su token de informe. La protección de 02-11g solo cubría `mailboxAddress()`.
+- `hasSearched()` y `reportToken()` usaban la clave amplia de cuotas, así que el token de `qa1+x@dominio` servía para `qa1@dominio`.
+- La deduplicación de casos también usaba la clave amplia: el caso de un alias QA (`juan+qa@`) se fusionaba con el del cliente `juan@` y lo reclasificaba como prueba.
+
+**Decisiones.**
+
+| Concepto | Regla |
+|---|---|
+| Formato de correo aceptado | Solo ASCII imprimible (`\x21-\x7e`), comprobado **antes** de pasar a minúsculas. No hay soporte SMTPUTF8/IDN: una dirección con tildes, eñes, homógrafos, ancho completo o caracteres invisibles se rechaza con 400 `email_not_supported` antes de clasificar, registrar, buscar, contar o enviar, y nunca se convierte. Un dominio IDN funciona escrito en punycode (`xn--…`); el navegador lo convierte en los campos `type="email"` |
+| Cuotas (`emailKey`) | Sin cambio, amplia: el `+` no regala búsquedas |
+| Identidad (`identityKey` = `mailboxAddress`) | Buzón exacto, con la regla documentada de Gmail. Se usa para la búsqueda registrada, el token de informe, el destinatario QA y la deduplicación de casos |
+| Clasificación QA (`isQa`) | Igual que 02-11g (entrada sin `+` cubre sus variantes `+`; entrada con `+` solo ese alias), ahora sobre direcciones ASCII |
+
+Enumeración: en este motor, U+212A es el único carácter no ASCII que `toLowerCase()` convierte en ASCII puro. La prueba recorre todo Unicode, así que detecta si cambia.
+
+**Cambios.**
+- `quotaStore.js`: `normalizeEmail` acepta solo ASCII; nuevo `identityKey`; `hasSearched`, la búsqueda registrada y `reportToken` usan la identidad.
+- `security.js`: `isEmail` acepta solo ASCII; nuevo `unsupportedEmail`.
+- `routes/email.js` (lead, quote, report) y `routes/suppliers.js` (search): devuelven 400 `email_not_supported`, sin direcciones en la respuesta.
+- `leadStore.js`: la deduplicación usa la identidad.
+- Frontend: `utils/emailFormat.ts` da el mensaje claro en el inicio y en «Hablar con SEAL».
+
+**Pruebas.** `test/qa-identidad-segura.test.mjs` (11):
+- enumeración Unicode;
+- 11 variantes parecidas (Kelvin, cirílico, ancho completo, ZWSP, guion suave, unión invisible, IDN, NFD, İ) en consulta, caso y búsqueda: 400 y cero correos;
+- cliente con correo Unicode: error claro, no va a QA; su versión ASCII va a ventas;
+- el token de `ka@` no sirve con variantes, alias, puntos ni para otra cuenta QA;
+- una cuenta QA no saca informes afuera con mayúsculas, alias, token ajeno ni PDF inválido, y se rechaza antes de límites, PDF y Resend;
+- un alias QA y su dirección base son casos distintos;
+- un cliente real ASCII va completo por el flujo comercial;
+- Gmail y Workspace con reglas distintas;
+- logs sin direcciones.
+
+**Mutaciones comprobadas** (ejecutando `qa-identidad-segura` y `qa-revision-final`):
+
+| Se quita | Pruebas que fallan |
+|---|---|
+| ASCII en `normalizeEmail` | 2 |
+| ASCII en `isEmail`/rutas | 7 |
+| Las dos (Unicode como antes) | 8 |
+| Token y búsqueda con `emailKey` | 3 |
+| Deduplicación con `emailKey` | 1 |
+| `isQa` solo con `emailKey` | 4 |
+
+**Limitaciones.**
+- Los correos con caracteres no ASCII en la parte local no se aceptan; reciben un mensaje claro.
+- Tras desplegar, una búsqueda hecha antes con un alias `+` fuera de Gmail necesita repetirse para enviar su informe, porque las marcas guardadas usan la clave anterior.
+- Un caso abierto antes con un alias `+` fuera de Gmail no se reconoce como repetición: se abre uno nuevo.
