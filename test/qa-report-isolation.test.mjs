@@ -172,7 +172,11 @@ test("5b · el reenvío de un cliente real rechazado sigue yendo a ventas (sin c
 test("6-7 · consulta, búsqueda, caso e informe de una cuenta QA usan la misma regla: todo solo a QA", async () => {
   const n = OK.attempts().length;
   await OK.post("/api/email/lead", { name: "Ana [PRUEBA]", email: "qa2@prueba.test", query: "Sillas plásticas apilables para eventos" }, "10.5.4.1");
-  const tok = await token(OK, "QA2+x@prueba.test", "10.5.4.1");
+  // 02-11h: the report token belongs to the exact mailbox that searched: the token of «QA2+x@» does
+  // not serve «qa2@» (it used to, through the broad quota key)
+  const aliasTok = await token(OK, "QA2+x@prueba.test", "10.5.4.1");
+  assert.equal((await report(OK, { recipientEmail: "qa2@prueba.test", requesterEmail: "qa2@prueba.test", reportToken: aliasTok }, "10.5.4.1")).status, 403);
+  const tok = await token(OK, "qa2@prueba.test", "10.5.4.1");
   const q = await (await OK.post("/api/email/quote", { name: "Ana", email: "qa2@prueba.test", product: "Sillas plásticas" }, "10.5.4.1")).json();
   assert.equal(q.test, true);
   assert.equal((await report(OK, { recipientEmail: "externo@empresa.gt", requesterEmail: "qa2@prueba.test", reportToken: tok }, "10.5.4.1")).status, 403);
@@ -185,7 +189,7 @@ test("6-7 · consulta, búsqueda, caso e informe de una cuenta QA usan la misma 
   assert.deepEqual(toQa.map((m) => m.bcc), [QA_COPIES]);
   // every QA send of this test (lead, search, case, report) stayed within QA destinations
   const qaOps = OK.attempts().slice(n).filter((m) => !/pedro@importadora/.test(m.subject || "") && !(m.to || []).includes(SALES));
-  assert.equal(qaOps.length, 5, "consulta, búsqueda, caso, informe QA e informe a cuenta QA");
+  assert.equal(qaOps.length, 6, "consulta, dos búsquedas (alias y cuenta), caso, informe QA e informe a cuenta QA");
   assertQaOnly(qaOps);
   // the only send to sales in this test is the real requester's own search notice
   assert.equal(OK.attempts().slice(n).filter((m) => addrs(m).some((x) => x.includes("ventas"))).length, 1, "ninguna operación QA llegó a ventas");

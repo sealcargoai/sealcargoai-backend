@@ -10,7 +10,7 @@ import {
 } from "../services/email.js";
 import { registerLead, markNotified, leadsPersistent } from "../services/leadStore.js";
 import { linksFor, baseUrl, caseLink } from "./leads.js";
-import { isEmail, clean, quantityError, budgetError, malformedFields } from "../middleware/security.js";
+import { isEmail, unsupportedEmail, clean, quantityError, budgetError, malformedFields } from "../middleware/security.js";
 import { hasSearched, emailKey, verifyReportToken } from "../services/quotaStore.js";
 
 // Reports go out from SEAL's address: only someone who ran a search may send
@@ -31,6 +31,13 @@ setInterval(() => {
 
 const router = express.Router();
 
+// 02-11h: an address with characters this service does not support (non-ASCII, invisible) gets a clear
+// answer; it is never converted into another address
+const EMAIL_NOT_SUPPORTED = {
+  error: "email_not_supported",
+  message: "Escriba el correo solo con letras sin tilde, números y signos comunes. / Write the email with plain letters, numbers and common signs only.",
+};
+
 router.post("/lead", async (req, res) => {
   try {
     if (malformedFields(req.body, ["name", "email", "query"]).length) return res.status(400).json({ error: "invalid_fields" });
@@ -41,6 +48,7 @@ router.post("/lead", async (req, res) => {
     if (!name || !email || !query) {
       return res.status(400).json({ error: "name, email, and query are required" });
     }
+    if (unsupportedEmail(req.body.email)) return res.status(400).json(EMAIL_NOT_SUPPORTED);
     if (!isEmail(email)) {
       return res.status(400).json({ error: "invalid email" });
     }
@@ -80,6 +88,7 @@ router.post("/quote", async (req, res) => {
       phone: clean(b.phone, 40),
       company: clean(b.company, 160),
     };
+    if (unsupportedEmail(b.email)) return res.status(400).json(EMAIL_NOT_SUPPORTED);
     if (!contact.name || !isEmail(contact.email)) {
       return res.status(400).json({ error: "name and a valid email are required" });
     }
@@ -156,6 +165,7 @@ router.post("/report", async (req, res) => {
     const b = req.body || {};
     // 02-11f: an address longer than 254 characters is refused, not cut (cutting it could leave a
     // different, valid address)
+    if (unsupportedEmail(b.recipientEmail) || unsupportedEmail(b.requesterEmail)) return res.status(400).json(EMAIL_NOT_SUPPORTED);
     const recipientEmail = typeof b.recipientEmail === "string" && b.recipientEmail.trim().length > 254 ? "" : clean(b.recipientEmail, 254);
     if (!isEmail(recipientEmail)) {
       return res.status(400).json({ error: "a valid recipientEmail is required" });

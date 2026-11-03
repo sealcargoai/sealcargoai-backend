@@ -108,10 +108,14 @@ export function escapeHtml(value) {
     .replace(/'/g, "&#39;");
 }
 
+// 02-11h: printable ASCII only (no SMTPUTF8/IDN addresses, no invisible characters): a Unicode address
+// is refused with a clear error before anything is classified, registered, searched or sent
 export function isEmail(value) {
-  return typeof value === "string" && value.length <= 254 &&
+  return typeof value === "string" && value.length <= 254 && /^[\x21-\x7e]+$/.test(value.trim()) &&
     /^[^\s@<>()[\]\\,;:"]+@[^\s@<>()[\]\\,;:"]+\.[a-z]{2,}$/i.test(value.trim());
 }
+/** An address written with characters this service does not support (non-ASCII or invisible). */
+export const unsupportedEmail = (value) => typeof value === "string" && value.trim() !== "" && !/^[\x21-\x7e]+$/.test(value.trim());
 
 // Trim and cap the length of free-text fields
 export function clean(value, max = 500) {
