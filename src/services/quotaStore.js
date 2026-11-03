@@ -235,6 +235,8 @@ if (!reportSecret) {
   }
 }
 export const signingSecretShared = secretShared;
+/** 02-11m: where the signing secret comes from, for /health (never the value): env | volume-file | ephemeral. */
+export const signingSecretSource = process.env.REPORT_SECRET ? "env" : secretShared ? "volume-file" : "ephemeral";
 /** A key for another use of the same secret (e.g. the verification store's hashes), never the secret itself. */
 export function deriveKey(label) {
   return crypto.createHmac("sha256", reportSecret).update(`key:${label}`).digest();
