@@ -66,7 +66,9 @@ test("servidor · el signo Kelvin no llega a Resend", async () => {
   await wait(250);
   const n = S.attempts().length;
   const r = await S.post("/api/email/report", { recipientEmail: "Ka@prueba.test", requesterEmail: "qa1@prueba.test", reportToken: tok, lang: "es" }, "10.8.0.2");
-  assert.equal(r.status, 403);
+  // 02-11h: refused even earlier, as an unsupported address (400), never folded into «ka@»
+  assert.equal(r.status, 400);
+  assert.equal((await r.json()).error, "email_not_supported");
   assert.equal(S.attempts().length, n);
 });
 
