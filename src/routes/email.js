@@ -21,8 +21,8 @@ const STORE_DOWN = { error: "verify_unavailable", message: "Email verification i
 const storeDown = (err) => err?.code === "VERIFY_STORE";
 import { clientIp } from "../middleware/security.js";
 
-// Reports go out from SEAL's address: only someone who ran a search may send
-// one, and each recipient gets a few per day (no open relay)
+// Reports go out from SEAL's address: only to the requester's own verified mailbox (a one-use grant from
+// /verify/confirm), and each mailbox gets at most 3 per day (no open relay)
 const DAY = 24 * 60 * 60 * 1000;
 // 02-11m: the daily report caps live in the shared verification store (they were per-process memory)
 const REPORT_CAPS = { to: 3, by: 10 };
@@ -286,7 +286,7 @@ router.post("/report", async (req, res) => {
 });
 
 // ── 02-11k: proof of control of an email address ─────────────────────────────
-// start: an 8-character code is emailed to the address (never to a sales address; rate limited per address and
+// start: a 10-character code is emailed to the address (never to a sales address; rate limited per address and
 // IP). The answer is the same whether or not a code was sent, so it reveals nothing about the address.
 router.post("/verify/start", async (req, res) => {
   try {
@@ -329,8 +329,8 @@ router.post("/verify/confirm", (req, res) => {
   const b = req.body || {};
   if (unsupportedEmail(b.email)) return res.status(400).json(EMAIL_NOT_SUPPORTED);
   const email = typeof b.email === "string" && b.email.trim().length <= 254 ? clean(b.email, 254) : "";
-  // 02-11m: 8 letters/digits (spaces and dashes allowed); anything else is a format error
-  if (!isEmail(email) || typeof b.code !== "string" || b.code.length > 24 || !/^[A-Za-z0-9]{6,10}$/.test(b.code.replace(/[\s-]/g, ""))) return res.status(400).json({ error: "invalid_code_format" });
+  // 02-11n: 10 letters/digits (spaces and dashes allowed); anything else is a format error
+  if (!isEmail(email) || typeof b.code !== "string" || b.code.length > 24 || !/^[A-Za-z0-9]{6,12}$/.test(b.code.replace(/[\s-]/g, ""))) return res.status(400).json({ error: "invalid_code_format" });
   let r;
   try {
     r = confirmVerification(email, b.code, clientIp(req));
