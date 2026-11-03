@@ -1,3 +1,4 @@
+import path from "node:path";
 import dotenv from "dotenv";
 dotenv.config();   // ✅ MUST BE FIRST
 
@@ -12,6 +13,7 @@ import { recipientConfig, emailDryRun, qaRouting, senderStatus, checkSenderDomai
 import { corsOrigin, rateLimit } from "./middleware/security.js";
 import { isQa, flushQuota } from "./services/quotaStore.js";
 import { sessionVerifies, verifyStoreStatus } from "./services/verifyStore.js";
+import { signingSecretSource } from "./services/quotaStore.js";
 import { flushLeads } from "./services/leadStore.js";
 import { flushFunnel } from "./services/funnelStore.js";
 
@@ -76,7 +78,26 @@ app.get("/", (_req, res) => {
 });
 
 // the version actually running (the commit Railway built), to tell which code a test hit
-export const BACKEND_VERSION = "2026.11.03-l";
+// 02-11m: is DATA_DIR (and the verification store's folder) inside the mounted volume?
+// Railway sets RAILWAY_VOLUME_MOUNT_PATH when a volume is attached to the service.
+function onVolume(dir) {
+  const vol = process.env.RAILWAY_VOLUME_MOUNT_PATH || "";
+  if (!dir) return "unset";
+  if (!vol) return "no-volume-attached";
+  const d = path.resolve(dir);
+  const v = path.resolve(vol);
+  return d === v || d.startsWith(v + path.sep) ? "on-volume" : "not-on-volume";
+}
+export function storageStatus() {
+  return {
+    dataDir: onVolume(process.env.DATA_DIR || ""),
+    verifyDir: onVolume(process.env.VERIFY_DATA_DIR || process.env.DATA_DIR || ""),
+    // the key file only survives a redeploy if it is on the volume (review 02-11m)
+    verifyKey: process.env.VERIFY_SECRET ? "env" : signingSecretSource === "volume-file" && onVolume(process.env.DATA_DIR || "") !== "on-volume" ? "file-not-on-volume" : signingSecretSource,
+  };
+}
+
+export const BACKEND_VERSION = "2026.11.03-n";
 app.get("/health", (_req, res) => {
   res.json({
     status:          "ok",
@@ -91,6 +112,8 @@ app.get("/health", (_req, res) => {
     verifyStore:     verifyStoreStatus(),
     // 02-11l: sender configuration and its domain status at Resend (read-only check, statuses only)
     emailSender:     senderStatus(),
+    // 02-11m: whether the data folders are on the volume Railway attached (status only, never paths/secrets)
+    storage:         storageStatus(),
     timestamp:       new Date().toISOString(),
   });
 });

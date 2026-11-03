@@ -10,6 +10,7 @@ let out;
 try {
   if (op === "consume") out = vs.consumeGrant(a.token, a.email);
   else if (op === "start") out = vs.start(a.email, a.ip).ok;
+  else if (op === "report") out = vs.consumeGrantAndCount(a.token, a.email, a.to, a.by, { to: 3, by: 10 });
   else out = "unknown op";
 } catch (e) {
   out = `error:${e.code}`;

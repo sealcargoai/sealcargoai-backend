@@ -281,3 +281,170 @@ Versión `2026.11.03-l`. Pruebas nuevas en `test/verificacion-02-11l.test.mjs` (
 - Los topes diarios de informes (`sentTo`/`sentBy`) siguen en memoria por proceso. Esto viene de antes.
 - Si el envío falla después de consumir la autorización, el cliente tiene que pedir otro código.
 - La entrega real de correos no se probó; todas las pruebas usan Resend simulado.
+
+## 02-11m — persistencia en Railway verificada, abuso del flujo de códigos y topes diarios de informes
+
+Versión `2026.11.03-m`. Pruebas nuevas en `test/verificacion-02-11m.test.mjs` (12). Las del bloque original fallan 6 de 7 con el código de 02-11l (la que pasa es la de privacidad). También se ajustaron las pruebas de 02-11k/02-11l que fijaban la política anterior.
+
+### 1. Persistencia (configuración real, revisada en Railway en modo solo lectura el 03-11-2026)
+
+- **Proyecto y servicio:** proyecto `proud-celebration`, entorno `production`, servicio `sealcargoai-backend`.
+- **Volumen:** `sealcargoai-backend-volume`, de 5 GB, montado en **`/data`**.
+- **Variables del servicio (23):**
+  - `DATA_DIR` = **`/data`**. Mostré solo ese valor, porque es una ruta; los demás quedaron ocultos.
+  - No existen `VERIFY_DATA_DIR`, `VERIFY_SECRET` ni `REPORT_SECRET`.
+  - En consecuencia, la clave de los hashes se deriva del archivo `report-secret`, guardado en `/data`, dentro del volumen. Eso hace que sobreviva a reinicios y despliegues.
+- **Réplicas:** Railway dice: «Replicas are not available for attached volumes». El servicio corre como **una sola instancia**.
+  - El almacén de archivo con bloqueo cubre esa instancia y también la superposición entre el proceso que sale y el que entra en un despliegue.
+  - Escalar a varias réplicas exigiría un almacén de red (Redis o Postgres con transacciones). Hoy no existe en el proyecto y tendría costo, así que no lo agregué.
+- **Evidencia en tiempo de ejecución:** `/health` → `storage`:
+  - `dataDir` / `verifyDir`: `on-volume`, `not-on-volume`, `no-volume-attached` o `unset`. Se calcula comparando con `RAILWAY_VOLUME_MOUNT_PATH`, que Railway define al adjuntar un volumen.
+  - `verifyKey`: `env`, `volume-file`, `file-not-on-volume` o `ephemeral`.
+  - No expone rutas ni valores.
+- **No cambié nada en Railway:** ni variables, ni volumen, ni datos.
+
+### 2. Remitente de Resend
+
+- `RESEND_FROM` usa el dominio **`seal-ai.sealcargo.com.gt`**. Vi solo el dominio; la dirección completa no la copié a ningún lado.
+- `/health` sigue diciendo `domain: "no_access"`: la clave de producción no puede leer `/domains`, probablemente porque es de solo envío.
+- El panel de Resend no estaba abierto en el navegador. No inicié sesión, porque eso requiere credenciales.
+- **DNS público, consultado con dns.google, solo lectura:**
+  - DKIM: `resend._domainkey.seal-ai.sealcargo.com.gt` publica la clave (`p=…`).
+  - Envío: `send.seal-ai.sealcargo.com.gt` tiene MX `feedback-smtp.us-east-1.amazonses.com` y SPF `v=spf1 include:amazonses.com ~all`.
+  - DMARC: `_dmarc.sealcargo.com.gt` = `v=DMARC1; p=none;`, que hereda el subdominio.
+- **Conclusión:** los registros que Resend pide para ese dominio están publicados. El estado «Verified» dentro de Resend y la entrega real **no están verificados**.
+- **Verificación controlada pendiente (manual):**
+  1. Abrir Resend → Domains y confirmar que el dominio aparece «Verified».
+  2. Enviar un único informe de prueba a un buzón propio del equipo y revisar que llegue, y si cae en spam.
+  - Si se quiere que `/health` lo muestre, crear una clave de Resend con permiso de lectura de dominios y mínimo privilegio, y configurarla con autorización.
+
+### 3. Abuso del flujo de códigos
+
+- **Causa raíz** (revisión independiente, hallazgo ALTO):
+  - El tope de 30 códigos por día y dirección, junto con el bloqueo por dirección tras 15 fallos al día y la regla de «solo códigos pedidos desde esta IP», permitían a un tercero dejar al titular **sin código utilizable** de forma sostenida.
+  - Bastaban unos 30 pedidos y 15 fallos al día.
+  - Esas medidas existían solo porque un código de 6 dígitos es adivinable.
+- **Cambio:**
+  - Códigos de **8 caracteres** de un alfabeto de 32 símbolos (sin I, O, 0 ni 1), unos 40 bits. Se aceptan con minúsculas, espacios o guion.
+  - Se eliminaron el bloqueo por dirección, el tope diario por dirección y la restricción por IP. Así, **cualquier código que llegue al buzón del titular le sirve desde cualquier conexión**.
+  - Se mantienen:
+    - 5 fallos por hora por dirección e IP, que bloquean solo esa IP;
+    - 3 por hora por dirección e IP, con espera de 0, 30 y 60 s;
+    - 6 por hora por dirección, más un cupo reservado de hasta 12 por hora: cada conexión con 0 o 1 pedido en la hora y sin bloqueo puede pedir;
+    - 10 por hora por IP y 300 por hora en total;
+    - los códigos anteriores siguen valiendo durante sus 15 minutos;
+    - la misma respuesta para todas las direcciones.
+  - Una espera de más de 5 minutos se redondea a múltiplos de 5 minutos, para no revelar cuándo pidieron otros.
+- **Fuerza bruta:** 5 intentos por IP y hora contra 12 códigos vigentes, sobre unos 1.1·10¹² combinaciones. Con 10 000 IPs sostenidas durante un año, la probabilidad de acertar sigue por debajo de 10⁻³. **Esta cifra estaba subestimada: la cota correcta para 8 caracteres era ~4.8·10⁻³ (0.48 %). Se corrigió en 02-11n.**
+- **Volumen máximo que un tercero puede mandar a una dirección:** 12 por hora, y solo con al menos 4 IPs. No hay tope diario, porque ese tope era la palanca de bloqueo; queda documentado.
+
+### 4. Topes diarios de informes
+
+- **Causa raíz:** `sentTo`/`sentBy` vivían en la memoria de cada proceso. Un reinicio los ponía en cero.
+- **Cambio:**
+  - Ahora se guardan en el almacén compartido, como hash, con una ventana de 24 h.
+  - `consumeGrantAndCount` usa la autorización y cuenta el informe **en una sola operación atómica**.
+  - Al llegar al tope responde 429 `report_limit` y la autorización **no se gasta**.
+  - `reportCapOk` queda como aviso temprano, antes de leer el PDF.
+- **Sin cambiar, a propósito:** un envío que falla después de contarse sigue gastando el cupo y la autorización. Devolverlos ante un timeout ambiguo podría duplicar el envío.
+
+### Comandos y resultados
+
+- `npm ci && npm test`: **178 de 178**.
+- Concurrencia real:
+  - 8 procesos con autorizaciones distintas → exactamente 3 informes.
+  - 6 informes a la vez contra 2 servidores → 3 aceptados y 3 rechazados con 429.
+  - Reinicio del servidor → el tope se mantiene.
+- Mutaciones (cada una hace fallar al menos una prueba):
+  - quitar el cupo reservado;
+  - no mirar el bloqueo de la IP;
+  - que `cancel` no devuelva el cupo;
+  - un solo pedido reservado;
+  - quitar el chequeo o el conteo atómico del tope de informes.
+
+### Limitaciones
+
+- Una sola instancia, por diseño de Railway con volumen.
+- La entrega real y el estado «Verified» en Resend no se verificaron.
+- `/health` es público y muestra estados de configuración, sin valores.
+- Un tercero con muchas IPs puede mandar hasta 12 códigos por hora a una dirección: es un costo de no bloquear al titular.
+
+
+## 02-11n — corrección del cálculo de riesgo, código de 10 caracteres y versión estable candidata
+
+Versión `2026.11.03-n` (backend y frontend). Base: la candidata `fix-02-11m`.
+
+### Cálculo de riesgo de los códigos (corregido)
+
+**La cifra de 02-11m estaba subestimada.** Decía que, con 10 000 IP durante un año, el riesgo quedaba por debajo de 10⁻³. No se contó que un atacante puede concentrar todos sus intentos mientras están vigentes los 12 códigos que él mismo pide. Con 8 caracteres, la cota real era 4.77·10⁻³ (0.48 %).
+
+**Modelo** (`scripts/riesgo-codigos.mjs`, que lee los parámetros reales de `verifyStore.js`):
+
+| Símbolo | Significado | Valor |
+|---|---|---|
+| N | Combinaciones posibles: alfabeto^longitud | 32¹⁰ ≈ 1.126·10¹⁵ (antes 32⁸ ≈ 1.100·10¹²) |
+| V | Códigos vigentes a la vez para un buzón | ≤ 12, el tope por hora y dirección. El atacante los pide juntos y valen 15 min. |
+| g | Intentos fallidos por IP y dirección por hora | 5. Una IP puede gastarlos dentro de esos 15 min. |
+| K | Conexiones distintas del atacante | IPv4, o un /64 en IPv6 |
+| H | Horas de ataque sostenido | 8 760 (un año) |
+
+Fórmulas, con G = g·K·H intentos en total:
+
+- **Cota conservadora** (atacante óptimo, que concentra todo): P ≤ 1 − (1 − V/N)^G ≈ G·V/N
+- **Probabilidad esperada** (los pedidos repartidos en la hora): V_prom = 12 · 15/60 = 3, y P ≈ G·V_prom/N
+
+**Resultados para 1 año con 10 caracteres** (tabla generada por el script; la prueba `test/riesgo-codigos.test.mjs` exige que coincida):
+
+| K (IP) | cota conservadora | esperada |
+|---|---|---|
+| 1,000 | 4.67e-7 | 1.17e-7 |
+| 10,000 | 4.67e-6 | 1.17e-6 |
+| 100,000 | 4.67e-5 | 1.17e-5 |
+
+Con 8 caracteres, los mismos casos daban 4.78e-4, 4.77e-3 y 4.67e-2: con 100 000 IP no se alcanzaba el objetivo de 10⁻⁴.
+
+**Cambio aplicado:**
+- Código de **10 caracteres** (unos 50 bits), mostrado como `ABCDE-FGHJK`.
+- No se agregó ningún bloqueo por dirección, así que el titular no queda fuera.
+- Todo lo demás se mantiene: 15 minutos de vigencia, códigos anteriores válidos, 5 fallos por hora que bloquean solo esa IP, y 12 códigos por hora por dirección.
+
+**No son garantías:** estas cifras salen de un modelo. No cubren fallas de implementación, el robo del buzón, ni un atacante con más de 100 000 conexiones (por ejemplo, una red de bots muy grande o muchos /48 de IPv6).
+
+**Prueba de regresión** (`test/riesgo-codigos.test.mjs`):
+- La cota con los parámetros reales debe ser < 10⁻⁴ para 100 000 IP en un año.
+- Las cifras de esta tabla deben coincidir con el cálculo.
+- La cifra de 8 caracteres se considera subestimada.
+- Con el código de 8 caracteres, la primera prueba falla.
+
+### Persistencia en Railway (revisada otra vez el 03-11-2026, solo lectura)
+
+- **Volumen:** `sealcargoai-backend-volume`, montado en `/data`. Se leyó en Volume → Settings → Mount path.
+- **Variables del servicio (23):**
+  - `DATA_DIR` = `/data`. Revelé solo ese valor, que es una ruta, y volví a ocultarlo.
+  - No existen `VERIFY_DATA_DIR`, `VERIFY_SECRET`, `REPORT_SECRET` ni `EMAIL_DRY_RUN`.
+- **Réplicas:** Railway dice «Replicas are not available for attached volumes»; el servicio corre en una sola instancia.
+- **Clave de los hashes:** sale del archivo `report-secret` en `DATA_DIR`, es decir, en `/data`, dentro del volumen.
+  - La producción actual (02-11l) reporta `verifyStore: "persistent"`. Eso solo ocurre si el secreto se leyó o creó en el volumen.
+  - El campo `/health.storage`, que muestra `on-volume` y el origen de la clave, llega con esta versión. **En producción todavía no se puede ver** hasta publicar.
+
+### Resend (solo lectura)
+
+- **Dominio del remitente:** `seal-ai.sealcargo.com.gt`. La dirección completa no se copia.
+- **DNS público** (dns.google):
+  - DKIM `resend._domainkey`: presente (`p=…`).
+  - `send.`: SPF `v=spf1 include:amazonses.com ~all` y MX `feedback-smtp.us-east-1.amazonses.com`.
+  - DMARC del dominio principal: `p=none`.
+- **Panel de Resend:** no hay sesión iniciada y no se inició ninguna, así que el estado «Verified» no se vio.
+- `/health.emailSender.domain = "no_access"` solo indica que la clave de producción no puede leer `/domains`. **No prueba que el envío falle, ni acredita que el dominio esté verificado.**
+- **La entrega real no se verificó:** no se envió ningún correo.
+
+### Otros ajustes
+
+- Si un correo ya recibió los 3 informes del día, la pantalla ahora lo dice así en ES/EN («máximo de informes de hoy (3 en 24 horas)») y descarga el PDF. Antes decía «no pudimos enviarlo desde aquí».
+
+### Riesgo residual por volumen de códigos
+
+- **Por buzón:** un tercero con 4 o más IP puede hacer que un mismo buzón reciba hasta 12 códigos por hora (288 por día). Para el titular es molestia o spam, pero no le impide verificar.
+- **Global:** el tope de 300 códigos por hora protege la reputación del remitente. A cambio, un atacante con unas 30 IP puede agotarlo y dejar la verificación sin servicio para todos durante una hora.
+- **Proveedor de correo:** demasiados rebotes o quejas pueden llevar a Resend o a Gmail a limitar el remitente. Se recomienda vigilar el panel de Resend (rebotes y quejas).
+- Para reducirlo más haría falta un CAPTCHA o un servicio anti-abuso. Requiere credenciales nuevas y posiblemente costo; no se agregó.

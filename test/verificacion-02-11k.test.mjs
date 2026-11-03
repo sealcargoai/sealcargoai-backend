@@ -31,7 +31,7 @@ const PDF = Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n").toS
 const report = (body) => S.post("/api/email/report", { totalCostText: "Q1,000.00", lang: "es", pdfBase64: PDF, ...body }, ip());
 const codeOf = (srv, email) => {
   const m = [...srv.mails()].reverse().find((x) => [].concat(x.to).includes(email) && /código/i.test(x.subject));
-  return m && m.html.match(/letter-spacing:6px">(\d{6})</)[1];
+  return m && m.html.match(/letter-spacing:6px[^"]*">([A-Z0-9]{5}-[A-Z0-9]{5})</)[1];
 };
 
 test("1 · una búsqueda con el correo de otra persona no da ninguna autorización de informe", async () => {
@@ -106,8 +106,12 @@ test("3 · código: los fallos de otros no anulan el del titular; 5 fallos desde
   for (let i = 0; i < 2; i++) one.push((await STRICT.post("/api/email/verify/start", { email: "spam@victima-ficticia.test" }, "10.14.0.1")).status);
   assert.deepEqual(one, [200, 429]);
   const many = [];
-  for (let i = 2; i < 9; i++) many.push((await STRICT.post("/api/email/verify/start", { email: "spam@victima-ficticia.test" }, `10.14.0.${i}`)).status);
-  assert.deepEqual(many, [200, 200, 200, 200, 200, 429, 429], "6 por dirección y hora en total");
+  for (let i = 2; i < 14; i++) many.push((await STRICT.post("/api/email/verify/start", { email: "spam@victima-ficticia.test" }, `10.14.0.${i}`)).status);
+  // 02-11m: 6 per hour, then one reserved code per fresh connection, up to 12 per hour in total
+  assert.deepEqual(many, [...Array(11).fill(200), 429], "12 por dirección y hora en total");
+  const again = await STRICT.post("/api/email/verify/start", { email: "spam@victima-ficticia.test" }, "10.14.0.1");
+  assert.equal(again.status, 429);
+  assert.ok(Number(again.headers.get("retry-after")) > 0, "Retry-After");
 });
 
 test("4 · el informe solo va al buzón verificado; un PDF o datos del navegador no se presentan como documento de SEAL", async () => {

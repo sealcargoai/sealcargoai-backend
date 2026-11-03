@@ -522,7 +522,9 @@ export async function sendReportToUser({
 export async function sendVerificationCode(email, code, lang = "es") {
   const resend = getResendClient();
   const en = lang === "en";
-  const c = String(code).replace(/\D/g, "").slice(0, 6);
+  // 02-11n: 10 characters, shown in two groups of 5 (ABCDE-FGHJK) to be easier to copy
+  const raw = String(code).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 10);
+  const c = raw.length === 10 ? `${raw.slice(0, 5)}-${raw.slice(5)}` : raw;
   const { data, error } = await resend.emails.send({
     from: FROM_EMAIL,
     to: [email],
@@ -530,8 +532,8 @@ export async function sendVerificationCode(email, code, lang = "es") {
     html: emailWrapper(
       en ? "Verification code" : "Código de verificación",
       en
-        ? `<p>Your code is:</p><p style="font-size:28px;font-weight:bold;letter-spacing:6px">${c}</p><p style="color:#64748b;font-size:12px">It expires in 15 minutes. If you did not ask for it, ignore this message: nothing will be sent without the code.</p>`
-        : `<p>Su código es:</p><p style="font-size:28px;font-weight:bold;letter-spacing:6px">${c}</p><p style="color:#64748b;font-size:12px">Vence en 15 minutos. Si usted no lo pidió, ignore este mensaje: sin el código no se envía nada.</p>`,
+        ? `<p>Your code is:</p><p style="font-size:28px;font-weight:bold;letter-spacing:6px;font-family:monospace">${c}</p><p style="color:#64748b;font-size:12px">It expires in 15 minutes. If you did not ask for it, ignore this message: nothing will be sent without the code.</p>`
+        : `<p>Su código es:</p><p style="font-size:28px;font-weight:bold;letter-spacing:6px;font-family:monospace">${c}</p><p style="color:#64748b;font-size:12px">Vence en 15 minutos. Si usted no lo pidió, ignore este mensaje: sin el código no se envía nada.</p>`,
     ),
   });
   if (error) throw new Error(error.message);

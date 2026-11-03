@@ -1,29 +1,29 @@
-// Proof that a person controls an email address (02-11k; shared store and abuse controls since 02-11l).
-// A 6-digit code is emailed to the address. Entering it returns two random credentials:
+// Proof that a person controls an email address (02-11k; shared store and abuse controls since 02-11l/m).
+// A 10-character code (32 symbols: A–Z without I/O, 2–9; about 50 bits) is emailed to the address.
+// Entering it returns two random credentials:
 //   · session     (12 h): «this browser verified this mailbox», which lets a QA account skip search limits
 //   · reportGrant (30 min, ONE use): authorizes one report email to that same mailbox
 //
-// Storage (02-11l). Codes, sessions and grants used to live in process memory: a restart lost them, and two
-// instances did not see each other's. With DATA_DIR set (the Railway volume), the state lives in one file,
-// DATA_DIR/verify.json. Every operation takes an exclusive lock file, reads the file, changes it and
-// replaces it atomically (write + rename), so operations are serialized across processes sharing the
-// volume and a grant can be used only once even with concurrent requests to different processes.
+// Storage (02-11l). With DATA_DIR set (the Railway volume) the state lives in DATA_DIR/verify.json. Every
+// operation takes an exclusive lock file, reads, changes and replaces the file atomically, so operations
+// are serialized across processes sharing the volume and a grant can be used only once.
 // Without DATA_DIR it stays in memory (tests, local); /health says which («verifyStore»).
-// If the store cannot be read or written, the operation throws VerifyStoreError: callers refuse (fail closed)
-// and tell the user to try again later. Nothing is granted on a store error.
+// If the store cannot be read or written, the operation throws VerifyStoreError: callers refuse (fail closed).
 //
 // Nothing is stored in clear: codes, tokens, addresses and IPs are stored as HMAC-SHA256 with a secret
 // from VERIFY_SECRET, else derived from the signing secret (REPORT_SECRET or DATA_DIR/report-secret).
 //
-// Abuse controls (02-11l). Anyone can ask for a code for any address, so:
+// Abuse controls (02-11m). Anyone can ask for a code for any address, and every code they ask for reaches
+// the OWNER's inbox. So the design keeps every code the owner receives usable, and caps volume per hour:
 //   · up to 3 codes per hour per (address, IP), with a progressive wait between them (0 s, 30 s, 60 s)
-//   · up to 6 codes per hour per address in total, and 10 per hour per IP
+//   · up to 6 codes per hour per address; past them, a connection that asked at most once for that address
+//     in the last hour and has not been locked for wrong codes still gets a code, up to 12 per hour
+//   · 10 per hour per IP; 300 per hour for the whole service; 30,000 tracked keys
 //   · a new code never cancels an earlier one: every code sent in the last 15 minutes stays valid
-//   · wrong codes are counted per (address, IP): 5 per hour lock THAT IP for that address, not the owner
-//   · after 15 wrong codes per day per address in total, an IP that already failed for that address gets no
-//     more attempts that day, and the others can only use a code sent at their own request: a brute force
-//     from many IPs stays bounded, and a third party's wrong guesses do not lock out the owner
-//   · global bounds: 300 codes per hour for the whole service; 30,000 tracked keys
+//   · wrong codes lock only the (address, IP) that typed them: 5 per hour. There is NO lock per address
+//     (a lock per address was a way for a third
+//     party to keep the owner out (02-11m review). No daily cap per address either (a cap that lasts a day
+//     was the same kind of lever); the hourly caps bound the volume a third party can send.
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -45,6 +45,12 @@ export class VerifyStoreError extends Error {
   }
 }
 
+// 32 symbols without look-alikes (no I, O, 0, 1). 02-11n: 10 of them ≈ 50 bits (it was 8 ≈ 40 bits: the
+// risk note of 02-11m understated the brute-force bound; see scripts/riesgo-codigos.mjs)
+export const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+export const CODE_LENGTH = 10;
+/** What the person typed → the canonical code: uppercase, without spaces or dashes. */
+export const normalizeCode = (x) => String(x || "").toUpperCase().replace(/[\s-]/g, "");
 const randomToken = () => crypto.randomBytes(32).toString("base64url");
 const okToken = (t) => typeof t === "string" && t.length >= 20 && t.length <= 100;
 
@@ -59,10 +65,12 @@ export function createVerifyStore({ dir = "", secret, env = process.env } = {}) 
     grantMs: 30 * MIN,
     perAddressIpHour: num(env.VERIFY_MAX_PER_ADDRESS_IP_HOUR, 3),
     perAddressHour: num(env.VERIFY_MAX_PER_ADDRESS_HOUR, 6),
+    // 02-11m: past the 6/hour, a connection with at most one request for this address in the last hour (and
+    // not locked for wrong codes) still gets a code, up to 12/hour per address
+    perAddressHardHour: num(env.VERIFY_MAX_PER_ADDRESS_HARD_HOUR, 12),
     perIpHour: num(env.VERIFY_MAX_PER_IP_HOUR, 10),
     waitSeconds: env.VERIFY_RESEND_WAIT_SECONDS === "0" ? 0 : num(env.VERIFY_RESEND_WAIT_SECONDS, 30),
     failsPerAddressIpHour: 5,
-    failsPerAddressDay: num(env.VERIFY_MAX_FAILS_PER_ADDRESS_DAY, 15),
     globalHour: num(env.VERIFY_MAX_GLOBAL_HOUR, 300),
     maxTracked: num(env.VERIFY_MAX_TRACKED, 30000),
   };
@@ -75,7 +83,7 @@ export function createVerifyStore({ dir = "", secret, env = process.env } = {}) 
   let memory = empty();
 
   function empty() {
-    return { codes: {}, sessions: {}, grants: {}, sent: {}, fails: {} };
+    return { codes: {}, sessions: {}, grants: {}, sent: {}, fails: {}, reports: {} };
   }
   function prune(s, now) {
     for (const k of Object.keys(s.codes)) {
@@ -86,6 +94,7 @@ export function createVerifyStore({ dir = "", secret, env = process.env } = {}) 
     for (const [m, win] of [
       [s.sent, HOUR],
       [s.fails, DAY],
+      [s.reports, DAY],
     ])
       for (const k of Object.keys(m)) {
         m[k] = m[k].filter((t) => now - t < win);
@@ -203,10 +212,17 @@ export function createVerifyStore({ dir = "", secret, env = process.env } = {}) 
         const ai = recent(s.sent[AI], now, HOUR);
         const a = recent(s.sent[A], now, HOUR);
         const i = recent(s.sent[I], now, HOUR);
-        const limited = (t) => ({ ok: false, reason: "rate_limited", retryAfterSeconds: Math.max(1, Math.ceil(t / SEC)) });
+        // waits longer than 5 minutes are rounded up to 5 minutes (they would tell when others asked)
+        const limited = (t) => {
+          const secs = Math.max(1, Math.ceil(t / SEC));
+          return { ok: false, reason: "rate_limited", retryAfterSeconds: secs > 300 ? Math.ceil(secs / 300) * 300 : secs };
+        };
         const oldest = (list) => HOUR - (now - Math.min(...list));
+        // a connection with at most one request for this address in the last hour, not locked for wrong codes
+        const lockedHere = recent(s.fails[`fai:${h(`${identity}|${ip || ""}`)}`], now, HOUR).length >= L.failsPerAddressIpHour;
+        const reserved = ai.length < 2 && !lockedHere;
         if (ai.length >= L.perAddressIpHour) return limited(oldest(ai));
-        if (a.length >= L.perAddressHour) return limited(oldest(a));
+        if (a.length >= L.perAddressHour && !(reserved && a.length < L.perAddressHardHour)) return limited(oldest(a));
         if (i.length >= L.perIpHour) return limited(oldest(i));
         // global bounds: codes per hour for the whole service (protects the sender's reputation) and the
         // number of tracked keys (protects the file size); past them, nobody gets a new code for a while
@@ -220,7 +236,7 @@ export function createVerifyStore({ dir = "", secret, env = process.env } = {}) 
         for (const k of [AI, A, I, "g"]) (s.sent[k] = s.sent[k] || []).push(now);
         // SEAL's own sales addresses: counted like any other, but no code exists (nothing to guess)
         if (noCode) return { ok: true, code: "" };
-        const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, "0");
+        const code = Array.from({ length: CODE_LENGTH }, () => CODE_ALPHABET[crypto.randomInt(0, CODE_ALPHABET.length)]).join("");
         (s.codes[A] = s.codes[A] || []).push({ c: h(`${identity}|${code}`), exp: now + L.codeMs, ai: AI, i: I, t: now });
         return { ok: true, code };
       });
@@ -235,8 +251,8 @@ export function createVerifyStore({ dir = "", secret, env = process.env } = {}) 
         const c = (s.codes[A] || []).find((x) => x.c === want);
         if (!c) return;
         s.codes[A] = s.codes[A].filter((x) => x !== c);
-        for (const k of [A, c.ai, c.i, "g"]) {
-          const list = s.sent[k] || [];
+        for (const [m, k] of [[s.sent, A], [s.sent, c.ai], [s.sent, c.i], [s.sent, "g"]]) {
+          const list = m[k] || [];
           const at = list.lastIndexOf(c.t);
           if (at >= 0) list.splice(at, 1);
         }
@@ -247,20 +263,11 @@ export function createVerifyStore({ dir = "", secret, env = process.env } = {}) 
       const identity = identityKey(email);
       if (!identity) return null;
       const A = `a:${h(identity)}`;
-      const FA = `fa:${h(identity)}`;
       const FAI = `fai:${h(`${identity}|${ip || ""}`)}`;
-      const given = Buffer.from(h(`${identity}|${String(code || "").trim()}`));
+      const given = Buffer.from(h(`${identity}|${normalizeCode(code)}`));
       return tx(now, (s) => {
         if (recent(s.fails[FAI], now, HOUR).length >= L.failsPerAddressIpHour) return null;
-        // the daily cap per address bounds a brute force from many IPs; an IP that has not failed for this
-        // address today still gets its attempt, so a third party's failures do not lock the owner out
-        // past the daily cap per address (a brute force from many IPs) only a code that was sent at the
-        // request of THIS IP is accepted, and only from an IP that has not failed today: the owner, who asks
-        // for and types the code from the same connection, still gets in; a fresh IP without its own code does not
-        const capped = recent(s.fails[FA], now, DAY).length >= L.failsPerAddressDay;
-        if (capped && recent(s.fails[FAI], now, DAY).length > 0) return null;
-        const I = `i:${h(String(ip || ""))}`;
-        const pending = (s.codes[A] || []).filter((c) => !capped || c.i === I);
+        const pending = s.codes[A] || [];
         const hit = pending.find((c) => {
           const want = Buffer.from(c.c);
           return want.length === given.length && crypto.timingSafeEqual(want, given);
@@ -268,7 +275,6 @@ export function createVerifyStore({ dir = "", secret, env = process.env } = {}) 
         if (!hit) {
           // a wrong code never voids a code the owner received: it only counts against this IP and address
           (s.fails[FAI] = s.fails[FAI] || []).push(now);
-          (s.fails[FA] = s.fails[FA] || []).push(now);
           return null;
         }
         delete s.codes[A]; // a code works once; the other pending ones are no longer needed
@@ -278,6 +284,34 @@ export function createVerifyStore({ dir = "", secret, env = process.env } = {}) 
         s.sessions[h(`s|${session}`)] = { id: ID, exp: now + L.sessionMs };
         s.grants[h(`g|${reportGrant}`)] = { id: ID, exp: now + L.grantMs };
         return { session, reportGrant, sessionSeconds: L.sessionMs / SEC, grantSeconds: L.grantMs / SEC };
+      });
+    },
+    /**
+     * 02-11l→m: daily report caps (they lived in each process's memory: a restart reset them and every
+     * process had its own). Read-only check, used before reading the PDF.
+     */
+    reportCapOk(toKey, byKey, caps, now = Date.now()) {
+      const T = `rt:${h(toKey)}`;
+      const B = `rb:${h(byKey)}`;
+      return tx(now, (s) => recent(s.reports[T], now, DAY).length < caps.to && recent(s.reports[B], now, DAY).length < caps.by);
+    },
+    /**
+     * Uses the report grant AND counts the report in one atomic operation: «grant» (not valid / already used),
+     * «limit» (daily cap reached; the grant is NOT used) or «ok».
+     */
+    consumeGrantAndCount(token, email, toKey, byKey, caps, now = Date.now()) {
+      const identity = identityKey(email);
+      if (!identity || !okToken(token)) return "grant";
+      const T = `rt:${h(toKey)}`;
+      const B = `rb:${h(byKey)}`;
+      return tx(now, (s) => {
+        const k = h(`g|${token}`);
+        if (s.grants[k]?.id !== h(identity)) return "grant";
+        if (recent(s.reports[T], now, DAY).length >= caps.to || recent(s.reports[B], now, DAY).length >= caps.by) return "limit";
+        delete s.grants[k];
+        (s.reports[T] = s.reports[T] || []).push(now);
+        (s.reports[B] = s.reports[B] || []).push(now);
+        return "ok";
       });
     },
     /** Whether this session token proves control of this address. */
@@ -306,6 +340,18 @@ export function createVerifyStore({ dir = "", secret, env = process.env } = {}) 
   };
 }
 
+/** 02-11n: the parameters the brute-force bound depends on (scripts/riesgo-codigos.mjs, test/riesgo-codigos). */
+export function codeRiskParams(env = process.env) {
+  const L = createVerifyStore({ secret: Buffer.from("params"), env }).limits;
+  return {
+    alphabet: CODE_ALPHABET.length,
+    length: CODE_LENGTH,
+    codeMinutes: L.codeMs / MIN,
+    maxCodesPerHour: L.perAddressHardHour,
+    failsPerIpHour: L.failsPerAddressIpHour,
+  };
+}
+
 // ── The app's store ──────────────────────────────────────────────────────────
 // VERIFY_DATA_DIR may point elsewhere (a separate volume); by default the app's DATA_DIR volume
 const store = createVerifyStore({ dir: process.env.VERIFY_DATA_DIR || process.env.DATA_DIR || "" });
@@ -317,6 +363,8 @@ export const cancelVerification = (email, ip, code, now) => store.cancel(email, 
 export const confirmVerification = (email, code, ip, now) => store.confirm(email, code, ip, now);
 export const grantValid = (token, email, now) => store.grantValid(token, email, now);
 export const consumeGrant = (token, email, now) => store.consumeGrant(token, email, now);
+export const reportCapOk = (toKey, byKey, caps, now) => store.reportCapOk(toKey, byKey, caps, now);
+export const consumeGrantAndCount = (token, email, toKey, byKey, caps, now) => store.consumeGrantAndCount(token, email, toKey, byKey, caps, now);
 /** For limiters: a store error means «not verified» (fail closed: normal limits apply). */
 export const sessionVerifies = (token, email, now) => {
   try {

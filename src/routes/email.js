@@ -15,27 +15,17 @@ import { recordEvent } from "../services/funnelStore.js";
 import { linksFor, baseUrl, caseLink } from "./leads.js";
 import { isEmail, unsupportedEmail, clean, quantityError, budgetError, malformedFields } from "../middleware/security.js";
 import { emailKey, identityKey, verifySigned } from "../services/quotaStore.js";
-import { startVerification, cancelVerification, confirmVerification, grantValid, consumeGrant } from "../services/verifyStore.js";
+import { startVerification, cancelVerification, confirmVerification, grantValid, reportCapOk, consumeGrantAndCount } from "../services/verifyStore.js";
 // 02-11l: if the verification store cannot be read or written nothing is granted or sent (fail closed)
 const STORE_DOWN = { error: "verify_unavailable", message: "Email verification is temporarily unavailable. Nothing was sent. Try again in a few minutes." };
 const storeDown = (err) => err?.code === "VERIFY_STORE";
 import { clientIp } from "../middleware/security.js";
 
-// Reports go out from SEAL's address: only someone who ran a search may send
-// one, and each recipient gets a few per day (no open relay)
+// Reports go out from SEAL's address: only to the requester's own verified mailbox (a one-use grant from
+// /verify/confirm), and each mailbox gets at most 3 per day (no open relay)
 const DAY = 24 * 60 * 60 * 1000;
-const sentTo = new Map(); // recipient key -> [timestamps]
-const sentBy = new Map(); // requester key -> [timestamps]
-function underCap(map, key, max) {
-  const now = Date.now();
-  const list = (map.get(key) || []).filter((t) => now - t < DAY);
-  map.set(key, list);
-  return list.length < max;
-}
-setInterval(() => {
-  const now = Date.now();
-  for (const m of [sentTo, sentBy]) for (const [k, list] of m) if (!list.some((t) => now - t < DAY)) m.delete(k);
-}, 60 * 60 * 1000).unref();
+// 02-11m: the daily report caps live in the shared verification store (they were per-process memory)
+const REPORT_CAPS = { to: 3, by: 10 };
 
 const router = express.Router();
 
@@ -236,7 +226,15 @@ router.post("/report", async (req, res) => {
     }
     const toKey = routing.test ? `qa:${identityKey(recipientEmail)}` : emailKey(recipientEmail);
     const byKey = routing.test ? `qa:${identityKey(requester)}` : emailKey(requester);
-    if (!underCap(sentTo, toKey, 3) || !underCap(sentBy, byKey, 10)) {
+    let capOk;
+    try {
+      capOk = reportCapOk(toKey, byKey, REPORT_CAPS);
+    } catch (err) {
+      if (!storeDown(err)) throw err;
+      console.error("❌ /email/report: verify store:", err.message);
+      return res.status(503).json(STORE_DOWN);
+    }
+    if (!capOk) {
       return res.status(429).json({ error: "report_limit", message: "Too many reports sent today." });
     }
 
@@ -250,19 +248,19 @@ router.post("/report", async (req, res) => {
         return res.status(400).json({ error: "invalid PDF" });
       }
     }
-    // the grant is used now (once): a replay of the same request is refused
+    // the grant is used AND the report counted in one atomic step: a replay, or a concurrent request to
+    // another process, cannot send twice or go past the daily caps
     let used;
     try {
-      used = consumeGrant(b.reportGrant, requester);
+      used = consumeGrantAndCount(b.reportGrant, requester, toKey, byKey, REPORT_CAPS);
     } catch (err) {
       if (!storeDown(err)) throw err;
       console.error("❌ /email/report: verify store:", err.message);
       return res.status(503).json(STORE_DOWN);
     }
-    if (!used) return res.status(403).json({ error: "report_not_allowed", message: "Confirm your email with the code we send you, then try again." });
+    if (used === "limit") return res.status(429).json({ error: "report_limit", message: "Too many reports sent today." });
+    if (used !== "ok") return res.status(403).json({ error: "report_not_allowed", message: "Confirm your email with the code we send you, then try again." });
 
-    sentTo.get(toKey).push(Date.now());
-    sentBy.get(byKey).push(Date.now());
     const result = await sendReportToUser({
       recipientEmail,
       recipientName: "",
@@ -288,7 +286,7 @@ router.post("/report", async (req, res) => {
 });
 
 // ── 02-11k: proof of control of an email address ─────────────────────────────
-// start: a 6-digit code is emailed to the address (never to a sales address; rate limited per address and
+// start: a 10-character code is emailed to the address (never to a sales address; rate limited per address and
 // IP). The answer is the same whether or not a code was sent, so it reveals nothing about the address.
 router.post("/verify/start", async (req, res) => {
   try {
@@ -331,7 +329,8 @@ router.post("/verify/confirm", (req, res) => {
   const b = req.body || {};
   if (unsupportedEmail(b.email)) return res.status(400).json(EMAIL_NOT_SUPPORTED);
   const email = typeof b.email === "string" && b.email.trim().length <= 254 ? clean(b.email, 254) : "";
-  if (!isEmail(email) || typeof b.code !== "string" || !/^\s*\d{6}\s*$/.test(b.code)) return res.status(400).json({ error: "invalid_code_format" });
+  // 02-11n: 10 letters/digits (spaces and dashes allowed); anything else is a format error
+  if (!isEmail(email) || typeof b.code !== "string" || b.code.length > 24 || !/^[A-Za-z0-9]{6,12}$/.test(b.code.replace(/[\s-]/g, ""))) return res.status(400).json({ error: "invalid_code_format" });
   let r;
   try {
     r = confirmVerification(email, b.code, clientIp(req));
