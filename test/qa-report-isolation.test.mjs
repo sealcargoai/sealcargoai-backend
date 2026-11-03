@@ -54,7 +54,8 @@ test("1 · cuenta QA + destinatario externo, de ventas o «de prueba» por nombr
   const before = OK.attempts().length;
   // (each from its own IP: the general per-IP limiter of /api/email is not what is being measured)
   let ip = 10;
-  for (const to of ["cliente@empresa.gt", SALES, "VENTAS+x@example.test", "prueba.demo@empresa.gt", "qa-dev@example.test"]) {
+  // 02-11f: «QA1+informe@» is not a listed QA address: a «+etiqueta» is not assumed to reach qa1@
+  for (const to of ["cliente@empresa.gt", SALES, "VENTAS+x@example.test", "prueba.demo@empresa.gt", "qa-dev@example.test", "QA1+informe@prueba.test", "qa-inbox+x@example.test"]) {
     const r = await report(OK, { recipientEmail: to, requesterEmail: "qa1@prueba.test", reportToken: tok }, `10.5.0.${ip++}`);
     assert.equal(r.status, 403, to);
     const body = await r.text();
@@ -71,7 +72,7 @@ test("1 · cuenta QA + destinatario externo, de ventas o «de prueba» por nombr
 
 test("2 · cuenta QA + destinatario QA autorizado → enviado solo a destinos QA", async () => {
   const tok = await token(OK, "qa1@prueba.test", "10.5.0.2");
-  for (const to of ["qa2@prueba.test", "QA1+informe@prueba.test", "qa-inbox@example.test"]) {
+  for (const to of ["qa2@prueba.test", "QA1@Prueba.Test", "qa-inbox@example.test"]) {
     const n = OK.mails().length;
     const r = await report(OK, { recipientEmail: to, requesterEmail: "qa1@prueba.test", reportToken: tok }, "10.5.0.2");
     assert.equal(r.status, 200, to);
