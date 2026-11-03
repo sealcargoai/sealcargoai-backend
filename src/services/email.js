@@ -36,35 +36,62 @@ function getResendClient() {
 //   commercial copies).
 // Development copies (ADMIN_EMAIL, ADMIN2_EMAIL, QA_NOTIFY_EMAILS) receive ONLY identified
 // test records, unless DEV_COPIES_REAL_LEADS=1 records an explicit authorization.
-// Test records go to QA_LEADS_EMAIL when set (a QA inbox), else to the commercial inbox
-// (marked [PRUEBA]), plus the development copies.
+// Test records go ONLY to the QA inbox (QA_LEADS_EMAIL) plus the development copies. 02-11c: when
+// the QA inbox is missing, invalid or is a commercial address, a test record is NOT emailed at all
+// (it used to fall back to the commercial inbox): the send is refused with QA_ROUTING_UNAVAILABLE.
 const LEADS_EMAIL = process.env.LEADS_EMAIL || "ventas@seal.com.gt";
 const emailList = (...values) =>
   [...new Set(values.flatMap((v) => String(v || "").split(",")).map((x) => x.trim().toLowerCase()).filter((x) => /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/.test(x)))];
 const COMMERCIAL = emailList(LEADS_EMAIL, process.env.LEADS_CC);
 const DEV_COPIES = emailList(process.env.ADMIN_EMAIL, process.env.ADMIN2_EMAIL, process.env.QA_NOTIFY_EMAILS).filter((x) => !COMMERCIAL.includes(x));
-const QA_INBOX = emailList(process.env.QA_LEADS_EMAIL);
+const QA_INBOX_RAW = String(process.env.QA_LEADS_EMAIL || "").trim();
+const QA_INBOX = emailList(QA_INBOX_RAW);
 const DEV_GETS_REAL = process.env.DEV_COPIES_REAL_LEADS === "1";
 
-// Test records (fictitious name/email, or a QA account) are flagged so sales doesn't follow them up
-const TEST_RE = /\b(prueba|test|testing|ficticio|ficticia|demo|fake|ejemplo)\b|@(example|test|prueba|mailinator)\./i;
-export function testTag(...values) {
-  return values.some((v) => TEST_RE.test(String(v || ""))) ? "[PRUEBA] " : "";
+// 02-11c: a test is identified ONLY by an explicit signal: the requester's email is in the QA
+// allow-list (QA_EMAILS). Words in the name, the email or the product ("demo", "unidad de prueba",
+// "testing", "ejemplo") never make a record a test: a real lead used to be marked [PRUEBA] by them.
+/** A test record: the email (or, for a report, the requester's email) is a QA account. */
+export function isTestRecord(...emails) {
+  return emails.some((x) => isQa(x));
 }
-/** A test record: test words in the name/email, or an email in QA_EMAILS. */
-export function isTestRecord(name, email) {
-  return !!testTag(name, email) || isQa(email);
+/** The subject tag of a test record. */
+export const qaTag = (test) => (test ? "[PRUEBA] " : "");
+/**
+ * Whether test records can be routed: "ok" | "missing" (QA_LEADS_EMAIL not set) | "invalid" (set, no
+ * valid address) | "overlaps_commercial" (a QA inbox address is also a commercial one). Only the
+ * status is exposed, never the addresses.
+ */
+export function qaRouting() {
+  // the same configuration read once at start (as the recipient lists): status and routing never disagree
+  if (!QA_INBOX_RAW) return "missing";
+  if (!QA_INBOX.length) return "invalid";
+  if (QA_INBOX.some((x) => COMMERCIAL.includes(x))) return "overlaps_commercial";
+  return "ok";
 }
-/** Recipients for a record: real → commercial only; test → QA inbox (or commercial) + dev copies. */
+export class QaRoutingError extends Error {
+  constructor() {
+    super("QA_ROUTING_UNAVAILABLE");
+    this.code = "qa_routing_unavailable";
+  }
+}
+/**
+ * Recipients for a record: real → commercial only (+ dev copies only with explicit authorization);
+ * test → QA inbox + dev copies, and NOTHING when QA routing is not "ok" (throws QaRoutingError):
+ * a test never reaches sales.
+ */
 export function recipientsFor(test) {
-  if (test) return [...new Set([...(QA_INBOX.length ? QA_INBOX : COMMERCIAL), ...DEV_COPIES])];
+  if (test) {
+    if (qaRouting() !== "ok") throw new QaRoutingError();
+    return [...new Set([...QA_INBOX, ...DEV_COPIES])].filter((x) => !COMMERCIAL.includes(x));
+  }
   return [...new Set([...COMMERCIAL, ...(DEV_GETS_REAL ? DEV_COPIES : [])])];
 }
 /** "ve***@seal.com.gt": shows where it went without exposing addresses. */
 export const maskEmail = (x) => String(x).replace(/^(.{1,2})[^@]*@/, "$1***@");
 /** No addresses in logs or stored error notes. */
 export const scrubEmails = (text) => String(text || "").replace(/[^\s@<>()"',;:]+@[^\s@<>()"',;:]+\.[a-z]{2,}/gi, "[correo]");
-export const recipientConfig = () => ({ commercial: COMMERCIAL.length, devCopies: DEV_COPIES.length, qaInbox: QA_INBOX.length, devGetsReal: DEV_GETS_REAL });
+export const recipientConfig = () => ({ commercial: COMMERCIAL.length, devCopies: DEV_COPIES.length, qaInbox: QA_INBOX.length, devGetsReal: DEV_GETS_REAL, qaRouting: qaRouting() });
 
 const FROM_EMAIL =
   process.env.RESEND_FROM ||
@@ -102,12 +129,13 @@ export async function sendLeadNotification({ name, email, query }) {
     <p><b>Correo:</b> ${e(email)}</p>
     <p><b>Consulta:</b> ${e(query)}</p>
   `;
-  const test = isTestRecord(name, email);
+  const test = isTestRecord(email);
+  const to = recipientsFor(test); // a test without QA routing throws: nothing is sent
   const { data, error } = await resend.emails.send({
     from: FROM_EMAIL,
-    to: recipientsFor(test),
+    to,
     replyTo: email,
-    subject: `${test ? "[PRUEBA] " : ""}Consulta iniciada (aún sin solicitud): ${name.replace(/[\r\n]/g, " ")}`,
+    subject: `${qaTag(test)}Consulta iniciada (aún sin solicitud): ${name.replace(/[\r\n]/g, " ")}`,
     html: emailWrapper("Consulta iniciada", content),
   });
 
@@ -155,9 +183,9 @@ export async function sendSearchLead({
 
   const { data, error } = await resend.emails.send({
     from: FROM_EMAIL,
-    to: recipientsFor(isTestRecord("", email) || !!testTag(userQuery)),
+    to: recipientsFor(isTestRecord(email)),
     ...(email ? { replyTo: email } : {}),
-    subject: `${testTag(email, userQuery)}Búsqueda: ${String(userQuery || productType || "producto").replace(/[\r\n]/g, " ").slice(0, 80)}${email ? " — " + email : ""}`,
+    subject: `${qaTag(isTestRecord(email))}Búsqueda: ${String(userQuery || productType || "producto").replace(/[\r\n]/g, " ").slice(0, 80)}${email ? " — " + email : ""}`,
     html: emailWrapper("Búsqueda realizada (aún sin solicitud a SEAL)", content),
   });
 
@@ -178,9 +206,9 @@ export async function sendQuoteRequest(data) {
 
   const { data: result, error } = await resend.emails.send({
     from: FROM_EMAIL,
-    to: recipientsFor(isTestRecord(data.name, data.email)),
+    to: recipientsFor(isTestRecord(data.email)),
     replyTo: data.email,
-    subject: `${testTag(data.name, data.email)}${String(data.requestType || "Solicitud de cotización").replace(/[\r\n]/g, " ")} — ${String(data.name).replace(/[\r\n]/g, " ")}`,
+    subject: `${qaTag(isTestRecord(data.email))}${String(data.requestType || "Solicitud de cotización").replace(/[\r\n]/g, " ")} — ${String(data.name).replace(/[\r\n]/g, " ")}`,
     html: emailWrapper("Quote Request", content),
   });
 
@@ -341,7 +369,8 @@ export async function sendReportToUser({
     ? [{ filename: `SEAL_${en ? "Report" : "Informe"}_${Date.now()}.pdf`, content: pdfBuffer }]
     : [];
   const other = requesterEmail && requesterEmail.toLowerCase() !== String(recipientEmail).toLowerCase();
-  const reportTest = isTestRecord(recipientName, recipientEmail) || isTestRecord("", requesterEmail);
+  const reportTest = isTestRecord(recipientEmail, requesterEmail);
+  const copies = recipientsFor(reportTest); // a test without QA routing throws before anything is sent
   const total = e(totalCostText || "US$" + Number(totalCost || 0).toLocaleString("en-US"));
 
   // the client's language, as in the PDF they chose
@@ -366,7 +395,7 @@ export async function sendReportToUser({
   const { data, error } = await resend.emails.send({
     from: FROM_EMAIL,
     to: recipientEmail,
-    bcc: recipientsFor(reportTest),
+    bcc: copies,
     subject: `${en ? "Your SEAL report" : "Su informe SEAL"}${supplierName ? ` - ${String(supplierName).replace(/[\r\n]/g, " ")}` : ""}`,
     html: emailWrapper(en ? "Import analysis report" : "Informe de análisis de importación", content),
     attachments,
@@ -379,9 +408,9 @@ export async function sendReportToUser({
   console.error("⚠️ Report to client failed, forwarding to SEAL:", scrubEmails(error.message));
   const fwd = await resend.emails.send({
     from: FROM_EMAIL,
-    to: recipientsFor(reportTest),
+    to: copies,
     replyTo: recipientEmail,
-    subject: `${testTag(recipientName, recipientEmail)}REENVIAR informe a cliente: ${recipientEmail}`,
+    subject: `${qaTag(reportTest)}REENVIAR informe a cliente: ${recipientEmail}`,
     html: emailWrapper(
       "Informe pendiente de reenviar",
       `<p><b>No se pudo enviar el informe directo al cliente.</b> Reenvíelo a <b>${e(recipientEmail)}</b>.</p>

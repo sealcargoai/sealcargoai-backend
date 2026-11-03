@@ -59,6 +59,9 @@ export function registerLead(input, now = Date.now()) {
   const existing = leads.find((l) => l.key === key && isOpen(l) && now - l.createdAt < OPEN_WINDOW);
   if (existing) {
     existing.repeats = (existing.repeats || 0) + 1;
+    // 02-11c: whether it is a test is decided again on every request (QA allow-list now): a case
+    // registered under an older rule never keeps a stale flag that would send it to the wrong inbox
+    existing.test = !!input.test;
     existing.updatedAt = now;
     // the newest data completes the case (never erases what was there); what changed is
     // reported to SEAL (same case number, no duplicate)
