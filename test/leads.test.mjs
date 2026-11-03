@@ -16,7 +16,7 @@ let srv;
 function start(extra = {}) {
   return new Promise((resolve, reject) => {
     const p = spawn(process.execPath, ["--import", path.resolve("test/fake-resend.mjs"), "src/index.js"], {
-      env: { ...process.env, PORT: String(PORT), DATA_DIR: dir, MAIL_LOG, RESEND_API_KEY: "re_test", LEADS_EMAIL: "ventas@seal.com.gt", ADMIN_EMAIL: "", ADMIN2_EMAIL: "", PUBLIC_API_URL: "", ...extra },
+      env: { ...process.env, PORT: String(PORT), DATA_DIR: dir, MAIL_LOG, RESEND_API_KEY: "re_test", LEADS_EMAIL: "ventas@seal.com.gt", ADMIN_EMAIL: "", ADMIN2_EMAIL: "", PUBLIC_API_URL: "", QA_EMAILS: "qa@example.com", QA_LEADS_EMAIL: "qa-inbox@example.net", ...extra },
       stdio: ["ignore", "pipe", "pipe"],
     });
     p.stdout.on("data", (d) => String(d).includes("running at") && resolve(p));
@@ -160,6 +160,8 @@ test("if the email to SEAL fails the case is kept, reported as not notified, and
 test("test records are flagged and kept out of the funnel", async () => {
   const j = await (await post("/api/email/quote", { ...CASE, name: "Prueba QA", email: "qa@example.com" }, "10.0.0.9")).json();
   assert.match(mails().at(-1).subject, /^\[PRUEBA\]/);
+  assert.deepEqual(mails().at(-1).to, ["qa-inbox@example.net"]);
+  assert.equal(j.test, true);
   assert.ok(j.id);
 });
 
