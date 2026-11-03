@@ -1,6 +1,6 @@
 import { Resend } from "resend";
 import { escapeHtml as e } from "../middleware/security.js";
-import { isQa } from "./quotaStore.js";
+import { isQa, emailKey } from "./quotaStore.js";
 
 /* ─────────────────────────────────────────────
    Safe Resend Client Creator
@@ -43,9 +43,14 @@ const LEADS_EMAIL = process.env.LEADS_EMAIL || "ventas@seal.com.gt";
 const emailList = (...values) =>
   [...new Set(values.flatMap((v) => String(v || "").split(",")).map((x) => x.trim().toLowerCase()).filter((x) => /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/.test(x)))];
 const COMMERCIAL = emailList(LEADS_EMAIL, process.env.LEADS_CC);
-const DEV_COPIES = emailList(process.env.ADMIN_EMAIL, process.env.ADMIN2_EMAIL, process.env.QA_NOTIFY_EMAILS).filter((x) => !COMMERCIAL.includes(x));
+// 02-11e: addresses are compared by mailbox (emailKey: case, «+etiqueta» and Gmail dots ignored).
+// «ventas+qa@…» is delivered to ventas@: it is a commercial address, never a QA one.
+const COMMERCIAL_KEYS = new Set(COMMERCIAL.map((x) => emailKey(x)).filter(Boolean));
+const isCommercial = (x) => COMMERCIAL_KEYS.has(emailKey(x));
+const DEV_COPIES = emailList(process.env.ADMIN_EMAIL, process.env.ADMIN2_EMAIL, process.env.QA_NOTIFY_EMAILS).filter((x) => !isCommercial(x));
 const QA_INBOX_RAW = String(process.env.QA_LEADS_EMAIL || "").trim();
 const QA_INBOX = emailList(QA_INBOX_RAW);
+const QA_INBOX_KEYS = new Set(QA_INBOX.map((x) => emailKey(x)).filter(Boolean));
 const DEV_GETS_REAL = process.env.DEV_COPIES_REAL_LEADS === "1";
 
 // 02-11c: a test is identified ONLY by an explicit signal: the requester's email is in the QA
@@ -66,7 +71,7 @@ export function qaRouting() {
   // the same configuration read once at start (as the recipient lists): status and routing never disagree
   if (!QA_INBOX_RAW) return "missing";
   if (!QA_INBOX.length) return "invalid";
-  if (QA_INBOX.some((x) => COMMERCIAL.includes(x))) return "overlaps_commercial";
+  if (QA_INBOX.some((x) => isCommercial(x))) return "overlaps_commercial";
   return "ok";
 }
 export class QaRoutingError extends Error {
@@ -83,9 +88,38 @@ export class QaRoutingError extends Error {
 export function recipientsFor(test) {
   if (test) {
     if (qaRouting() !== "ok") throw new QaRoutingError();
-    return [...new Set([...QA_INBOX, ...DEV_COPIES])].filter((x) => !COMMERCIAL.includes(x));
+    return [...new Set([...QA_INBOX, ...DEV_COPIES])].filter((x) => !isCommercial(x));
   }
   return [...new Set([...COMMERCIAL, ...(DEV_GETS_REAL ? DEV_COPIES : [])])];
+}
+/**
+ * 02-11e: a recipient a QA operation may send a report to: a QA account (QA_EMAILS) or the QA inbox
+ * (QA_LEADS_EMAIL), and never a commercial address. Decided only by the server's lists.
+ */
+export function qaRecipientAllowed(email) {
+  const k = emailKey(email);
+  if (!k || COMMERCIAL_KEYS.has(k)) return false;
+  return isQa(email) || QA_INBOX_KEYS.has(k);
+}
+/**
+ * 02-11e: the routing decision for a report, shared by the route (before any limit is counted) and the
+ * sender (before Resend is called). A report is a QA operation when the requester OR the recipient is
+ * a QA account. A QA operation needs QA routing "ok" (else 503) AND a QA recipient (else 403): it used
+ * to go to any recipientEmail with the QA inbox in BCC.
+ * → { test, ok, status?, error? }
+ */
+export function reportRouting(recipientEmail, requesterEmail) {
+  const test = isTestRecord(recipientEmail, requesterEmail);
+  if (!test) return { test, ok: true };
+  if (qaRouting() !== "ok") return { test, ok: false, status: 503, error: "qa_routing_unavailable" };
+  if (!qaRecipientAllowed(recipientEmail)) return { test, ok: false, status: 403, error: "qa_recipient_not_allowed" };
+  return { test, ok: true };
+}
+export class QaRecipientError extends Error {
+  constructor() {
+    super("QA_RECIPIENT_NOT_ALLOWED");
+    this.code = "qa_recipient_not_allowed";
+  }
 }
 /** "ve***@seal.com.gt": shows where it went without exposing addresses. */
 export const maskEmail = (x) => String(x).replace(/^(.{1,2})[^@]*@/, "$1***@");
@@ -369,7 +403,11 @@ export async function sendReportToUser({
     ? [{ filename: `SEAL_${en ? "Report" : "Informe"}_${Date.now()}.pdf`, content: pdfBuffer }]
     : [];
   const other = requesterEmail && requesterEmail.toLowerCase() !== String(recipientEmail).toLowerCase();
-  const reportTest = isTestRecord(recipientEmail, requesterEmail);
+  // 02-11e: the same decision as the route, again here, before Resend is called: a QA report goes
+  // only to a QA recipient, with QA copies; without QA routing or to any other address nothing is sent
+  const routing = reportRouting(recipientEmail, requesterEmail);
+  if (!routing.ok) throw routing.status === 503 ? new QaRoutingError() : new QaRecipientError();
+  const reportTest = routing.test;
   const copies = recipientsFor(reportTest); // a test without QA routing throws before anything is sent
   const total = e(totalCostText || "US$" + Number(totalCost || 0).toLocaleString("en-US"));
 
@@ -395,7 +433,11 @@ export async function sendReportToUser({
   const { data, error } = await resend.emails.send({
     from: FROM_EMAIL,
     to: recipientEmail,
-    bcc: copies,
+    // 02-11e: the recipient is not copied to itself (a report to the QA inbox arrived there twice)
+    ...(() => {
+      const bcc = copies.filter((x) => emailKey(x) !== emailKey(recipientEmail));
+      return bcc.length ? { bcc } : {};
+    })(),
     subject: `${en ? "Your SEAL report" : "Su informe SEAL"}${supplierName ? ` - ${String(supplierName).replace(/[\r\n]/g, " ")}` : ""}`,
     html: emailWrapper(en ? "Import analysis report" : "Informe de análisis de importación", content),
     attachments,
@@ -404,8 +446,9 @@ export async function sendReportToUser({
   if (!error) return { delivered: true, data };
 
   // Resend can refuse external recipients (e.g. sender domain not verified).
-  // Don't lose the lead: send the report to SEAL sales so they forward it.
-  console.error("⚠️ Report to client failed, forwarding to SEAL:", scrubEmails(error.message));
+  // Don't lose the lead: send the report to SEAL sales so they forward it. 02-11e: a QA report is
+  // forwarded only to the QA copies (recipientsFor(true): QA inbox + dev copies, never sales).
+  console.error(`⚠️ Report to ${reportTest ? "QA recipient" : "client"} failed, forwarding to ${reportTest ? "the QA inbox" : "SEAL"}:`, scrubEmails(error.message));
   const fwd = await resend.emails.send({
     from: FROM_EMAIL,
     to: copies,
