@@ -281,3 +281,90 @@ Versión `2026.11.03-l`. Pruebas nuevas en `test/verificacion-02-11l.test.mjs` (
 - Los topes diarios de informes (`sentTo`/`sentBy`) siguen en memoria por proceso. Esto viene de antes.
 - Si el envío falla después de consumir la autorización, el cliente tiene que pedir otro código.
 - La entrega real de correos no se probó; todas las pruebas usan Resend simulado.
+
+## 02-11m — persistencia en Railway verificada, abuso del flujo de códigos y topes diarios de informes
+
+Versión `2026.11.03-m`. Pruebas nuevas en `test/verificacion-02-11m.test.mjs` (12). Las del bloque original fallan 6 de 7 con el código de 02-11l (la que pasa es la de privacidad). También se ajustaron las pruebas de 02-11k/02-11l que fijaban la política anterior.
+
+### 1. Persistencia (configuración real, revisada en Railway en modo solo lectura el 03-11-2026)
+
+- **Proyecto y servicio:** proyecto `proud-celebration`, entorno `production`, servicio `sealcargoai-backend`.
+- **Volumen:** `sealcargoai-backend-volume`, de 5 GB, montado en **`/data`**.
+- **Variables del servicio (23):**
+  - `DATA_DIR` = **`/data`**. Mostré solo ese valor, porque es una ruta; los demás quedaron ocultos.
+  - No existen `VERIFY_DATA_DIR`, `VERIFY_SECRET` ni `REPORT_SECRET`.
+  - En consecuencia, la clave de los hashes se deriva del archivo `report-secret`, guardado en `/data`, dentro del volumen. Eso hace que sobreviva a reinicios y despliegues.
+- **Réplicas:** Railway dice: «Replicas are not available for attached volumes». El servicio corre como **una sola instancia**.
+  - El almacén de archivo con bloqueo cubre esa instancia y también la superposición entre el proceso que sale y el que entra en un despliegue.
+  - Escalar a varias réplicas exigiría un almacén de red (Redis o Postgres con transacciones). Hoy no existe en el proyecto y tendría costo, así que no lo agregué.
+- **Evidencia en tiempo de ejecución:** `/health` → `storage`:
+  - `dataDir` / `verifyDir`: `on-volume`, `not-on-volume`, `no-volume-attached` o `unset`. Se calcula comparando con `RAILWAY_VOLUME_MOUNT_PATH`, que Railway define al adjuntar un volumen.
+  - `verifyKey`: `env`, `volume-file`, `file-not-on-volume` o `ephemeral`.
+  - No expone rutas ni valores.
+- **No cambié nada en Railway:** ni variables, ni volumen, ni datos.
+
+### 2. Remitente de Resend
+
+- `RESEND_FROM` usa el dominio **`seal-ai.sealcargo.com.gt`**. Vi solo el dominio; la dirección completa no la copié a ningún lado.
+- `/health` sigue diciendo `domain: "no_access"`: la clave de producción no puede leer `/domains`, probablemente porque es de solo envío.
+- El panel de Resend no estaba abierto en el navegador. No inicié sesión, porque eso requiere credenciales.
+- **DNS público, consultado con dns.google, solo lectura:**
+  - DKIM: `resend._domainkey.seal-ai.sealcargo.com.gt` publica la clave (`p=…`).
+  - Envío: `send.seal-ai.sealcargo.com.gt` tiene MX `feedback-smtp.us-east-1.amazonses.com` y SPF `v=spf1 include:amazonses.com ~all`.
+  - DMARC: `_dmarc.sealcargo.com.gt` = `v=DMARC1; p=none;`, que hereda el subdominio.
+- **Conclusión:** los registros que Resend pide para ese dominio están publicados. El estado «Verified» dentro de Resend y la entrega real **no están verificados**.
+- **Verificación controlada pendiente (manual):**
+  1. Abrir Resend → Domains y confirmar que el dominio aparece «Verified».
+  2. Enviar un único informe de prueba a un buzón propio del equipo y revisar que llegue, y si cae en spam.
+  - Si se quiere que `/health` lo muestre, crear una clave de Resend con permiso de lectura de dominios y mínimo privilegio, y configurarla con autorización.
+
+### 3. Abuso del flujo de códigos
+
+- **Causa raíz** (revisión independiente, hallazgo ALTO):
+  - El tope de 30 códigos por día y dirección, junto con el bloqueo por dirección tras 15 fallos al día y la regla de «solo códigos pedidos desde esta IP», permitían a un tercero dejar al titular **sin código utilizable** de forma sostenida.
+  - Bastaban unos 30 pedidos y 15 fallos al día.
+  - Esas medidas existían solo porque un código de 6 dígitos es adivinable.
+- **Cambio:**
+  - Códigos de **8 caracteres** de un alfabeto de 32 símbolos (sin I, O, 0 ni 1), unos 40 bits. Se aceptan con minúsculas, espacios o guion.
+  - Se eliminaron el bloqueo por dirección, el tope diario por dirección y la restricción por IP. Así, **cualquier código que llegue al buzón del titular le sirve desde cualquier conexión**.
+  - Se mantienen:
+    - 5 fallos por hora por dirección e IP, que bloquean solo esa IP;
+    - 3 por hora por dirección e IP, con espera de 0, 30 y 60 s;
+    - 6 por hora por dirección, más un cupo reservado de hasta 12 por hora: cada conexión con 0 o 1 pedido en la hora y sin bloqueo puede pedir;
+    - 10 por hora por IP y 300 por hora en total;
+    - los códigos anteriores siguen valiendo durante sus 15 minutos;
+    - la misma respuesta para todas las direcciones.
+  - Una espera de más de 5 minutos se redondea a múltiplos de 5 minutos, para no revelar cuándo pidieron otros.
+- **Fuerza bruta:** 5 intentos por IP y hora contra 12 códigos vigentes, sobre unos 1.1·10¹² combinaciones. Con 10 000 IPs sostenidas durante un año, la probabilidad de acertar sigue por debajo de 10⁻³.
+- **Volumen máximo que un tercero puede mandar a una dirección:** 12 por hora, y solo con al menos 4 IPs. No hay tope diario, porque ese tope era la palanca de bloqueo; queda documentado.
+
+### 4. Topes diarios de informes
+
+- **Causa raíz:** `sentTo`/`sentBy` vivían en la memoria de cada proceso. Un reinicio los ponía en cero.
+- **Cambio:**
+  - Ahora se guardan en el almacén compartido, como hash, con una ventana de 24 h.
+  - `consumeGrantAndCount` usa la autorización y cuenta el informe **en una sola operación atómica**.
+  - Al llegar al tope responde 429 `report_limit` y la autorización **no se gasta**.
+  - `reportCapOk` queda como aviso temprano, antes de leer el PDF.
+- **Sin cambiar, a propósito:** un envío que falla después de contarse sigue gastando el cupo y la autorización. Devolverlos ante un timeout ambiguo podría duplicar el envío.
+
+### Comandos y resultados
+
+- `npm ci && npm test`: **178 de 178**.
+- Concurrencia real:
+  - 8 procesos con autorizaciones distintas → exactamente 3 informes.
+  - 6 informes a la vez contra 2 servidores → 3 aceptados y 3 rechazados con 429.
+  - Reinicio del servidor → el tope se mantiene.
+- Mutaciones (cada una hace fallar al menos una prueba):
+  - quitar el cupo reservado;
+  - no mirar el bloqueo de la IP;
+  - que `cancel` no devuelva el cupo;
+  - un solo pedido reservado;
+  - quitar el chequeo o el conteo atómico del tope de informes.
+
+### Limitaciones
+
+- Una sola instancia, por diseño de Railway con volumen.
+- La entrega real y el estado «Verified» en Resend no se verificaron.
+- `/health` es público y muestra estados de configuración, sin valores.
+- Un tercero con muchas IPs puede mandar hasta 12 códigos por hora a una dirección: es un costo de no bloquear al titular.
