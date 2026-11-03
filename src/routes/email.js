@@ -7,11 +7,16 @@ import {
   qaRouting,
   reportRouting,
   scrubEmails,
+  sendVerificationCode,
+  isCommercialAddress,
 } from "../services/email.js";
-import { registerLead, markNotified, leadsPersistent } from "../services/leadStore.js";
+import { registerLead, findDuplicate, markNotified, leadsPersistent } from "../services/leadStore.js";
+import { recordEvent } from "../services/funnelStore.js";
 import { linksFor, baseUrl, caseLink } from "./leads.js";
 import { isEmail, unsupportedEmail, clean, quantityError, budgetError, malformedFields } from "../middleware/security.js";
-import { hasSearched, emailKey, identityKey, verifyReportToken } from "../services/quotaStore.js";
+import { emailKey, identityKey, verifySigned } from "../services/quotaStore.js";
+import { startVerification, cancelVerification, confirmVerification, grantValid, consumeGrant } from "../services/verifyStore.js";
+import { clientIp } from "../middleware/security.js";
 
 // Reports go out from SEAL's address: only someone who ran a search may send
 // one, and each recipient gets a few per day (no open relay)
@@ -76,7 +81,7 @@ router.post("/quote", async (req, res) => {
     const malformed = malformedFields(
       b,
       ["name", "email", "phone", "company", "product", "productDescription", "productType", "quantity", "supplierName", "supplierUrl", "price", "priceSource", "publishedPrice", "totalCostText", "totalCost", "budget", "destination", "message", "caseRef", "source", "intent", "requestType", "lang"],
-      ["assumptions", "warnings", "chat", "earlier"],
+      ["assumptions", "warnings", "chat", "earlier", "caseAuth"],
     );
     if (malformed.length) return res.status(400).json({ error: "invalid_fields", fields: malformed.slice(0, 10) });
     if (b.totalCost !== undefined && b.totalCost !== null && b.totalCost !== "" && !Number.isFinite(Number(b.totalCost))) return res.status(400).json({ error: "invalid_fields", fields: ["totalCost"] });
@@ -125,7 +130,7 @@ router.post("/quote", async (req, res) => {
     if (invalid) return res.status(400).json({ error: invalid });
     if (!caseData.totalCostText && Number(b.totalCost) > 0) caseData.totalCostText = `US$${Math.round(Number(b.totalCost)).toLocaleString("en-US")}`;
     for (const k of Object.keys(caseData)) if (caseData[k] === "") delete caseData[k];
-    const { lead, duplicate, changes, contactPending } = registerLead({
+    const input = {
       contact,
       case: caseData,
       source: clean(b.source, 40),
@@ -133,7 +138,35 @@ router.post("/quote", async (req, res) => {
       requestType: clean(b.requestType, 80) || "Solicitud de cotización",
       lang: b.lang,
       test: isTestRecord(contact.email),
+    };
+    // 02-11k: a repeat may update the open case only with proof of control of THAT case: its signed case
+    // token (the «t» of the case link the client received when the case was created), sent as «ID:token»
+    const dup = findDuplicate(input);
+    const authorized = !!dup && list(b.caseAuth, 5, 120).some((x) => {
+      const i = x.lastIndexOf(":");
+      return i > 0 && x.slice(0, i) === dup.id && verifySigned(`case:${dup.id}`, x.slice(i + 1));
     });
+    const { lead, duplicate, changes } = registerLead(input, Date.now(), { authorized });
+    if (duplicate && !authorized) {
+      // nothing changed and no case number or link is handed out. Only if SEAL never got the ORIGINAL
+      // case email (it failed) is that same original email retried, unchanged, so the case is not lost.
+      console.log("ℹ️ /email/quote: repeat of an open case without its case token: nothing changed");
+      let retried;
+      if (lead.notified === false) {
+        try {
+          const sent = await sendCaseToSeal(lead, linksFor(lead, baseUrl(req)), null);
+          markNotified(lead.id, true, "", Date.now(), sent?.id, sent?.to);
+          retried = true;
+        } catch (err) {
+          console.error("❌ case email retry failed:", lead.id, scrubEmails(err.message));
+          retried = false;
+        }
+      }
+      // (review) the answer is the same whether or not a retry happened: it reveals nothing about that case
+      void retried;
+      return res.json({ success: true, duplicate: true, unchanged: true });
+    }
+    if (!duplicate && !lead.test) recordEvent("solicitud_enviada", `srv-${lead.id}`, Date.now(), false, { server: true });
     // an identical repeat of an open case is not emailed again (unless the first email
     // failed); a repeat with new information goes to SEAL as an update of the same case
     let notified = lead.notified;
@@ -157,7 +190,8 @@ router.post("/quote", async (req, res) => {
     // product and supplier) can come from anyone who knows those three: it must not hand out the
     // existing case (chat, budget, prices). The client already received the link the first time.
     // contactPending: different contact data came with a repeat and was NOT applied (the client is told)
-    res.json({ success: true, id: lead.id, duplicate, notified: notified !== false, test: !!lead.test, ...(duplicate ? (contactPending ? { contactPending: true } : {}) : { caseUrl: caseLink(lead, baseUrl(req)) }) });
+    // the case link (with its token) only when the case is created; the authorized owner already has it
+    res.json({ success: true, id: lead.id, duplicate, notified: notified !== false, test: !!lead.test, ...(duplicate ? { updated: true } : { caseUrl: caseLink(lead, baseUrl(req)) }) });
   } catch (err) {
     console.error("❌ /email/quote:", scrubEmails(err.message));
     res.status(500).json({ error: "Could not send email" });
@@ -167,29 +201,28 @@ router.post("/quote", async (req, res) => {
 router.post("/report", async (req, res) => {
   try {
     const b = req.body || {};
-    // 02-11f: an address longer than 254 characters is refused, not cut (cutting it could leave a
-    // different, valid address)
     if (unsupportedEmail(b.recipientEmail) || unsupportedEmail(b.requesterEmail)) return res.status(400).json(EMAIL_NOT_SUPPORTED);
-    const recipientEmail = typeof b.recipientEmail === "string" && b.recipientEmail.trim().length > 254 ? "" : clean(b.recipientEmail, 254);
-    if (!isEmail(recipientEmail)) {
-      return res.status(400).json({ error: "a valid recipientEmail is required" });
-    }
+    // 02-11f: an address longer than 254 characters is refused, not cut
     const requester = typeof b.requesterEmail === "string" && b.requesterEmail.trim().length > 254 ? "" : clean(b.requesterEmail, 254);
-    // the requester must have searched AND hold the token that search returned
-    if (!isEmail(requester) || !hasSearched(requester) || !verifyReportToken(requester, b.reportToken)) {
-      return res.status(403).json({ error: "report_not_allowed", message: "Only the person who ran the search can send this report." });
+    if (!isEmail(requester)) return res.status(400).json({ error: "a valid requesterEmail is required" });
+    // 02-11k: a report goes ONLY to the requester's own mailbox, the one proved with a code. Another
+    // recipient is refused (a relay of a PDF made in the browser, with SEAL as sender, was possible).
+    const rawTo = typeof b.recipientEmail === "string" ? b.recipientEmail.trim() : "";
+    if (rawTo && (rawTo.length > 254 || !isEmail(rawTo) || identityKey(rawTo) !== identityKey(requester)))
+      return res.status(403).json({ error: "recipient_must_be_requester", message: "The report can only be sent to your own verified email." });
+    const recipientEmail = requester;
+    // 02-11k: proof of control of the address: a one-use grant from /verify/confirm (random, server-stored,
+    // 30 minutes). The old token was derived from the address and handed to anyone who searched with it.
+    if (!grantValid(b.reportGrant, requester)) {
+      return res.status(403).json({ error: "report_not_allowed", message: "Confirm your email with the code we send you, then try again." });
     }
-    // 02-11e: a QA report (QA requester or recipient) goes only to a QA recipient and only with QA routing
-    // "ok"; anything else is refused HERE, before the daily limits count it and before Resend is called
+    // 02-11e: a QA report goes only to a QA recipient and only with QA routing "ok"; refused HERE,
+    // before the daily limits count it and before Resend is called
     const routing = reportRouting(recipientEmail, requester);
     if (!routing.ok) {
-      // no addresses: only what was refused and that nothing left
       console.warn(`⚠️ /email/report: QA report refused (${routing.error}); nothing sent, no limit counted`);
       return res.status(routing.status).json({ error: routing.error });
     }
-    // daily caps: real reports keep the broad key (aliases can't multiply them); 02-11i: a QA operation
-    // counts under its own exact identities, so QA testing never uses up the caps of a real client who
-    // shares part of the address («qa1@» QA and the client «qa1+compras@» used to share both caps)
     const toKey = routing.test ? `qa:${identityKey(recipientEmail)}` : emailKey(recipientEmail);
     const byKey = routing.test ? `qa:${identityKey(requester)}` : emailKey(requester);
     if (!underCap(sentTo, toKey, 3) || !underCap(sentBy, byKey, 10)) {
@@ -206,14 +239,14 @@ router.post("/report", async (req, res) => {
         return res.status(400).json({ error: "invalid PDF" });
       }
     }
+    // the grant is used now (once): a replay of the same request is refused
+    if (!consumeGrant(b.reportGrant, requester)) return res.status(403).json({ error: "report_not_allowed", message: "Confirm your email with the code we send you, then try again." });
 
     sentTo.get(toKey).push(Date.now());
     sentBy.get(byKey).push(Date.now());
     const result = await sendReportToUser({
       recipientEmail,
-      // 02-11j: a name typed by the requester is used in the greeting only when the report goes to the
-      // requester's own mailbox; for anyone else it is free text in SEAL's name (a phishing vector)
-      recipientName: identityKey(recipientEmail) === identityKey(requester) ? clean(b.recipientName, 120) : "",
+      recipientName: "",
       requesterEmail: requester,
       pdfBuffer,
       // no links or addresses in what goes into the subject and body
@@ -233,6 +266,41 @@ router.post("/report", async (req, res) => {
     if (err?.code === "qa_recipient_not_allowed") return res.status(403).json({ error: err.code });
     res.status(500).json({ error: "Could not send email" });
   }
+});
+
+// ── 02-11k: proof of control of an email address ─────────────────────────────
+// start: a 6-digit code is emailed to the address (never to a sales address; rate limited per address and
+// IP). The answer is the same whether or not a code was sent, so it reveals nothing about the address.
+router.post("/verify/start", async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (unsupportedEmail(b.email)) return res.status(400).json(EMAIL_NOT_SUPPORTED);
+    const email = typeof b.email === "string" && b.email.trim().length <= 254 ? clean(b.email, 254) : "";
+    if (!isEmail(email)) return res.status(400).json({ error: "invalid email" });
+    if (isCommercialAddress(email)) return res.json({ sent: true });
+    const r = startVerification(email, clientIp(req));
+    if (!r.ok) return res.status(429).json({ error: "verify_limit", message: "Too many codes requested. Try again in an hour." });
+    try {
+      await sendVerificationCode(email, r.code, b.lang === "en" ? "en" : "es");
+    } catch (err) {
+      cancelVerification(email, clientIp(req), r.code); // a failed send does not use up the caps
+      throw err;
+    }
+    res.json({ sent: true });
+  } catch (err) {
+    console.error("❌ /email/verify/start:", scrubEmails(err.message));
+    res.status(500).json({ error: "Could not send email" });
+  }
+});
+// confirm: the code → a 12-hour session and a one-use report grant (random tokens, kept only as hashes)
+router.post("/verify/confirm", (req, res) => {
+  const b = req.body || {};
+  if (unsupportedEmail(b.email)) return res.status(400).json(EMAIL_NOT_SUPPORTED);
+  const email = typeof b.email === "string" && b.email.trim().length <= 254 ? clean(b.email, 254) : "";
+  if (!isEmail(email) || typeof b.code !== "string" || !/^\s*\d{6}\s*$/.test(b.code)) return res.status(400).json({ error: "invalid_code_format" });
+  const r = confirmVerification(email, b.code);
+  if (!r) return res.status(403).json({ error: "code_invalid", message: "The code is wrong or expired. Ask for a new one." });
+  res.json({ verified: true, session: r.session, reportGrant: r.reportGrant, sessionSeconds: r.sessionSeconds, grantSeconds: r.grantSeconds });
 });
 
 export default router;
