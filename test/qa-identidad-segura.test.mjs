@@ -165,6 +165,7 @@ test("servidor · el token de ka@ no sirve con variantes parecidas, con alias, c
 
 test("servidor · una cuenta QA no saca informes afuera con mayúsculas, alias, token ajeno ni PDF; se rechaza antes de límites, PDF y Resend", async () => {
   const own = await token("qa1@prueba.test", "carpas para eventos 3x3");
+  // 02-11i: «qa1+x@» is NOT a QA account (not listed): its token exists, but it is another identity
   const alias = await token("qa1+x@prueba.test", "carpas para eventos 3x3");
   const kaTok = await token("ka@prueba.test", "manteles de poliéster");
   const k = S.attempts().length;
@@ -172,7 +173,6 @@ test("servidor · una cuenta QA no saca informes afuera con mayúsculas, alias, 
   for (const [requester, tk, want] of [
     ["qa1@prueba.test", own, "qa_recipient_not_allowed"],
     ["QA1@PRUEBA.TEST", own, "qa_recipient_not_allowed"],
-    ["qa1+x@prueba.test", alias, "qa_recipient_not_allowed"], // the alias of a QA account is still QA: isolated
     ["qa1@prueba.test", kaTok, "report_not_allowed"],
     ["qa1@prueba.test", alias, "report_not_allowed"],
   ]) {

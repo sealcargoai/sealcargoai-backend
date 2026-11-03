@@ -38,8 +38,9 @@ test("B · un alias «+» en QA_EMAILS clasifica como QA solo a ese alias, no a 
     assert.equal(isTestRecord(real), false, real);
     assert.deepEqual(reportRouting("gerencia@empresa-cliente.gt", real), { test: false, ok: true }, real);
   }
-  // an entry without «+» still covers its variants (the same person stays isolated)
-  assert.equal(isQa("QA1+x@prueba.test"), true);
+  // 02-11i: an entry without «+» does NOT cover its «+» variants outside Gmail (each is its own account)
+  assert.equal(isQa("QA1+x@prueba.test"), false);
+  assert.equal(isQa("QA1@Prueba.Test"), true);
   // Gmail: the alias reaches the base inbox (Google's rule), so base and alias are the same account
   assert.equal(isQa("anaqa@googlemail.com"), true);
   assert.equal(qaRecipientAllowed("a.n.a.q.a+otro@gmail.com"), true);

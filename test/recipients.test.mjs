@@ -74,7 +74,7 @@ test("a QA account (QA_EMAILS) without QA routing: refused with 503, nothing reg
   const q = await post("/api/email/quote", { name: "Ana", email: "qa.cuenta@empresa.gt", product: "Termos" });
   assert.equal(q.status, 503);
   assert.deepEqual(await q.json(), { error: "qa_routing_unavailable" });
-  const l = await post("/api/email/lead", { name: "Ana", email: "QA.Cuenta+x@empresa.gt", query: "Termos de acero para oficina" });
+  const l = await post("/api/email/lead", { name: "Ana", email: "QA.Cuenta@Empresa.GT", query: "Termos de acero para oficina" });
   assert.equal(l.status, 503);
   assert.equal(mails().length, n, "no email at all");
 });

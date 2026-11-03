@@ -47,9 +47,9 @@ test("consulta iniciada y caso comerciales con esas palabras: ventas, sin [PRUEB
   assert.doesNotMatch(m[0].subject, /PRUEBA/);
 });
 
-test("cuenta QA permitida (en cualquier mayúscula o con +etiqueta) con buzón QA: cada evento va solo a QA y marcado", async () => {
+test("cuenta QA permitida (en cualquier mayúscula; 02-11i: un alias «+» no listado ya no es QA) con buzón QA: cada evento va solo a QA y marcado", async () => {
   const n = OK.mails().length;
-  await OK.post("/api/email/lead", { name: "Ana", email: "QA1+r1@prueba.test", query: "Sillas plásticas apilables para eventos" }, "10.1.0.3");
+  await OK.post("/api/email/lead", { name: "Ana", email: "QA1@Prueba.Test", query: "Sillas plásticas apilables para eventos" }, "10.1.0.3");
   const s = await (await search(OK, "qa1@prueba.test", "10.1.0.3", "sillas plásticas apilables para eventos")).json();
   await wait(300);
   const q = await (await OK.post("/api/email/quote", { name: "Ana", email: "qa1@prueba.test", product: "Sillas plásticas" }, "10.1.0.3")).json();
