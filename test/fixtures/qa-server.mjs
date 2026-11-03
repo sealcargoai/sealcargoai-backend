@@ -23,6 +23,8 @@ export function server(portBase, env) {
           QA_EMAILS: "qa1@prueba.test",
           VERIFY_MAX_PER_ADDRESS_HOUR: "100",
           VERIFY_MAX_PER_IP_HOUR: "1000",
+          VERIFY_MAX_PER_ADDRESS_IP_HOUR: "100",
+          VERIFY_RESEND_WAIT_SECONDS: "0",
           QA_LEADS_EMAIL: "",
           ADMIN_EMAIL: "",
           ADMIN2_EMAIL: "",

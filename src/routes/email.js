@@ -16,6 +16,9 @@ import { linksFor, baseUrl, caseLink } from "./leads.js";
 import { isEmail, unsupportedEmail, clean, quantityError, budgetError, malformedFields } from "../middleware/security.js";
 import { emailKey, identityKey, verifySigned } from "../services/quotaStore.js";
 import { startVerification, cancelVerification, confirmVerification, grantValid, consumeGrant } from "../services/verifyStore.js";
+// 02-11l: if the verification store cannot be read or written nothing is granted or sent (fail closed)
+const STORE_DOWN = { error: "verify_unavailable", message: "Email verification is temporarily unavailable. Nothing was sent. Try again in a few minutes." };
+const storeDown = (err) => err?.code === "VERIFY_STORE";
 import { clientIp } from "../middleware/security.js";
 
 // Reports go out from SEAL's address: only someone who ran a search may send
@@ -213,7 +216,15 @@ router.post("/report", async (req, res) => {
     const recipientEmail = requester;
     // 02-11k: proof of control of the address: a one-use grant from /verify/confirm (random, server-stored,
     // 30 minutes). The old token was derived from the address and handed to anyone who searched with it.
-    if (!grantValid(b.reportGrant, requester)) {
+    let allowed;
+    try {
+      allowed = grantValid(b.reportGrant, requester);
+    } catch (err) {
+      if (!storeDown(err)) throw err;
+      console.error("❌ /email/report: verify store:", err.message);
+      return res.status(503).json(STORE_DOWN);
+    }
+    if (!allowed) {
       return res.status(403).json({ error: "report_not_allowed", message: "Confirm your email with the code we send you, then try again." });
     }
     // 02-11e: a QA report goes only to a QA recipient and only with QA routing "ok"; refused HERE,
@@ -240,7 +251,15 @@ router.post("/report", async (req, res) => {
       }
     }
     // the grant is used now (once): a replay of the same request is refused
-    if (!consumeGrant(b.reportGrant, requester)) return res.status(403).json({ error: "report_not_allowed", message: "Confirm your email with the code we send you, then try again." });
+    let used;
+    try {
+      used = consumeGrant(b.reportGrant, requester);
+    } catch (err) {
+      if (!storeDown(err)) throw err;
+      console.error("❌ /email/report: verify store:", err.message);
+      return res.status(503).json(STORE_DOWN);
+    }
+    if (!used) return res.status(403).json({ error: "report_not_allowed", message: "Confirm your email with the code we send you, then try again." });
 
     sentTo.get(toKey).push(Date.now());
     sentBy.get(byKey).push(Date.now());
@@ -277,17 +296,32 @@ router.post("/verify/start", async (req, res) => {
     if (unsupportedEmail(b.email)) return res.status(400).json(EMAIL_NOT_SUPPORTED);
     const email = typeof b.email === "string" && b.email.trim().length <= 254 ? clean(b.email, 254) : "";
     if (!isEmail(email)) return res.status(400).json({ error: "invalid email" });
-    if (isCommercialAddress(email)) return res.json({ sent: true });
-    const r = startVerification(email, clientIp(req));
-    if (!r.ok) return res.status(429).json({ error: "verify_limit", message: "Too many codes requested. Try again in an hour." });
+    const ip = clientIp(req);
+    // 02-11l: SEAL's own sales addresses never get codes, but they go through the same limits and answer
+    // the same way as any address (they used to answer at once and never be limited, which told them apart)
+    const commercial = isCommercialAddress(email);
+    const r = startVerification(email, ip, undefined, { noCode: commercial });
+    if (!r.ok) {
+      res.set("Retry-After", String(r.retryAfterSeconds || 60));
+      return res.status(429).json({ error: "verify_limit", retryAfterSeconds: r.retryAfterSeconds || 60, message: "Too many codes requested for now. Wait and try again; the codes already sent still work." });
+    }
+    if (commercial) {
+      // same answer and a similar delay as a real send: SEAL's sales addresses are not told apart
+      await new Promise((ok) => setTimeout(ok, 150 + Math.floor(Math.random() * 250)));
+      return res.json({ sent: true });
+    }
     try {
       await sendVerificationCode(email, r.code, b.lang === "en" ? "en" : "es");
     } catch (err) {
-      cancelVerification(email, clientIp(req), r.code); // a failed send does not use up the caps
+      cancelVerification(email, ip, r.code); // a failed send does not use up the caps
       throw err;
     }
     res.json({ sent: true });
   } catch (err) {
+    if (storeDown(err)) {
+      console.error("❌ /email/verify/start: verify store:", err.message);
+      return res.status(503).json(STORE_DOWN);
+    }
     console.error("❌ /email/verify/start:", scrubEmails(err.message));
     res.status(500).json({ error: "Could not send email" });
   }
@@ -298,7 +332,14 @@ router.post("/verify/confirm", (req, res) => {
   if (unsupportedEmail(b.email)) return res.status(400).json(EMAIL_NOT_SUPPORTED);
   const email = typeof b.email === "string" && b.email.trim().length <= 254 ? clean(b.email, 254) : "";
   if (!isEmail(email) || typeof b.code !== "string" || !/^\s*\d{6}\s*$/.test(b.code)) return res.status(400).json({ error: "invalid_code_format" });
-  const r = confirmVerification(email, b.code);
+  let r;
+  try {
+    r = confirmVerification(email, b.code, clientIp(req));
+  } catch (err) {
+    if (!storeDown(err)) throw err;
+    console.error("❌ /email/verify/confirm: verify store:", err.message);
+    return res.status(503).json(STORE_DOWN);
+  }
   if (!r) return res.status(403).json({ error: "code_invalid", message: "The code is wrong or expired. Ask for a new one." });
   res.json({ verified: true, session: r.session, reportGrant: r.reportGrant, sessionSeconds: r.sessionSeconds, grantSeconds: r.grantSeconds });
 });

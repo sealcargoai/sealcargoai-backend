@@ -14,7 +14,7 @@ import { verifyEmail } from "./fixtures/verify.mjs";
 const ENV = { QA_EMAILS: "qa1@prueba.test", QA_LEADS_EMAIL: "qa-inbox@example.test", LEADS_EMAIL: "ventas@example.test", ADMIN_TOKEN: "admin-token-ficticio-0123456789" };
 const S = server(8700, ENV);
 // default (production) verification caps: 3 codes per address and hour
-const STRICT = server(8900, { ...ENV, VERIFY_MAX_PER_ADDRESS_HOUR: "", VERIFY_MAX_PER_IP_HOUR: "" });
+const STRICT = server(8900, { ...ENV, VERIFY_MAX_PER_ADDRESS_HOUR: "", VERIFY_MAX_PER_IP_HOUR: "", VERIFY_MAX_PER_ADDRESS_IP_HOUR: "", VERIFY_RESEND_WAIT_SECONDS: "" });
 before(async () => {
   await S.start();
   await STRICT.start();
@@ -66,34 +66,48 @@ test("2 · autorización: alterada, de otra identidad, repetida o vencida → re
   assert.equal(S.attempts().length, k);
   assert.equal((await report({ requesterEmail: "lucia@importadora-ficticia.test", reportGrant: v.reportGrant })).status, 200, "la buena, una vez");
   assert.equal((await report({ requesterEmail: "lucia@importadora-ficticia.test", reportGrant: v.reportGrant })).status, 403, "repetida");
-  // expiry and code rules, on the module itself (time is injected)
-  const vs = await import("../src/services/verifyStore.js");
+  // expiry and code rules, on a store instance (time is injected)
+  const { createVerifyStore } = await import("../src/services/verifyStore.js");
+  const vs = createVerifyStore({ secret: Buffer.from("secreto-de-prueba") });
   const t0 = Date.now();
-  const st = vs.startVerification("vence@ficticio.test", "10.0.0.1", t0);
-  assert.equal(vs.confirmVerification("vence@ficticio.test", st.code, t0 + 16 * 60 * 1000), null, "código vencido (15 min)");
-  const st2 = vs.startVerification("vence2@ficticio.test", "10.0.0.1", t0);
-  const ok = vs.confirmVerification("vence2@ficticio.test", st2.code, t0);
+  const st = vs.start("vence@ficticio.test", "10.0.0.1", t0);
+  assert.equal(vs.confirm("vence@ficticio.test", st.code, "10.0.0.1", t0 + 16 * 60 * 1000), null, "código vencido (15 min)");
+  const st2 = vs.start("vence2@ficticio.test", "10.0.0.1", t0);
+  const ok = vs.confirm("vence2@ficticio.test", st2.code, "10.0.0.1", t0);
   assert.ok(ok);
-  assert.equal(vs.confirmVerification("vence2@ficticio.test", st2.code, t0), null, "un código sirve una vez");
+  assert.equal(vs.confirm("vence2@ficticio.test", st2.code, "10.0.0.1", t0), null, "un código sirve una vez");
   assert.equal(vs.grantValid(ok.reportGrant, "vence2@ficticio.test", t0 + 31 * 60 * 1000), false, "autorización vencida (30 min)");
-  assert.equal(vs.sessionIdentity(ok.session, t0 + 13 * 60 * 60 * 1000), "", "sesión vencida (12 h)");
+  assert.equal(vs.sessionVerifies(ok.session, "vence2@ficticio.test", t0 + 11 * 60 * 60 * 1000), true);
+  assert.equal(vs.sessionVerifies(ok.session, "vence2@ficticio.test", t0 + 13 * 60 * 60 * 1000), false, "sesión vencida (12 h)");
   assert.notEqual(ok.reportGrant, ok.session);
   assert.ok(ok.reportGrant.length >= 40, "token aleatorio de 256 bits");
 });
 
-test("3 · código: 5 intentos fallidos lo anulan; correo de ventas no recibe códigos; límite por dirección (3/hora por defecto)", async () => {
+test("3 · código: los fallos de otros no anulan el del titular; 5 fallos desde una IP la bloquean; ventas no recibe códigos; límites por defecto", async () => {
   await S.post("/api/email/verify/start", { email: "intentos@ficticio.test" }, ip());
   const good = codeOf(S, "intentos@ficticio.test");
   const wrong = good === "000000" ? "111111" : "000000";
+  // 02-11l: wrong codes from other IPs do not void the code the owner received
   for (let i = 0; i < 5; i++) assert.equal((await S.post("/api/email/verify/confirm", { email: "intentos@ficticio.test", code: wrong }, ip())).status, 403);
-  assert.equal((await S.post("/api/email/verify/confirm", { email: "intentos@ficticio.test", code: good }, ip())).status, 403, "anulado tras 5 intentos");
+  assert.equal((await S.post("/api/email/verify/confirm", { email: "intentos@ficticio.test", code: good }, ip())).status, 200, "el código del titular sigue sirviendo");
+  // 5 wrong codes from ONE IP lock that IP for that address (not others)
+  await S.post("/api/email/verify/start", { email: "intentos2@ficticio.test" }, "10.13.99.1");
+  const good2 = codeOf(S, "intentos2@ficticio.test");
+  const wrong2 = good2 === "000000" ? "111111" : "000000";
+  for (let i = 0; i < 5; i++) await S.post("/api/email/verify/confirm", { email: "intentos2@ficticio.test", code: wrong2 }, "10.13.99.2");
+  assert.equal((await S.post("/api/email/verify/confirm", { email: "intentos2@ficticio.test", code: good2 }, "10.13.99.2")).status, 403, "esa IP queda bloqueada");
+  assert.equal((await S.post("/api/email/verify/confirm", { email: "intentos2@ficticio.test", code: good2 }, "10.13.99.3")).status, 200, "el titular desde otra IP, no");
   const k = S.mails().length;
   const sales = await S.post("/api/email/verify/start", { email: "VENTAS+x@example.test" }, ip());
   assert.deepEqual(await sales.json(), { sent: true }, "misma respuesta (no revela nada)");
   assert.equal(S.mails().length, k, "pero a ventas no se envía");
-  const codes = [];
-  for (let i = 0; i < 4; i++) codes.push((await STRICT.post("/api/email/verify/start", { email: "spam@victima-ficticia.test" }, `10.14.0.${i + 1}`)).status);
-  assert.deepEqual(codes, [200, 200, 200, 429]);
+  // default limits: one IP gets 1 code, then must wait (progressive); 6 per address per hour in total
+  const one = [];
+  for (let i = 0; i < 2; i++) one.push((await STRICT.post("/api/email/verify/start", { email: "spam@victima-ficticia.test" }, "10.14.0.1")).status);
+  assert.deepEqual(one, [200, 429]);
+  const many = [];
+  for (let i = 2; i < 9; i++) many.push((await STRICT.post("/api/email/verify/start", { email: "spam@victima-ficticia.test" }, `10.14.0.${i}`)).status);
+  assert.deepEqual(many, [200, 200, 200, 200, 200, 429, 429], "6 por dirección y hora en total");
 });
 
 test("4 · el informe solo va al buzón verificado; un PDF o datos del navegador no se presentan como documento de SEAL", async () => {
@@ -178,40 +192,6 @@ test("privacidad · registros sin direcciones ni códigos", () => {
 });
 
 // ── Revisión independiente ───────────────────────────────────────────────────────────────────
-test("10 · un tercero que pide códigos no anula el del titular; fallos limitados por día; envío fallido no consume el tope", async () => {
-  const vs = await import("../src/services/verifyStore.js");
-  const t0 = Date.parse("2026-11-03T10:00:00Z");
-  const mine = vs.startVerification("dueno@cliente-ficticio.test", "10.20.0.1", t0);
-  vs.startVerification("dueno@cliente-ficticio.test", "10.20.0.2", t0 + 1000); // someone else asks for one
-  assert.ok(vs.confirmVerification("dueno@cliente-ficticio.test", mine.code, t0 + 2000), "el código del titular sigue sirviendo");
-  // 10 wrong codes in a day lock the address (brute force across codes and IPs), even with a right code after
-  let t = t0 + 3 * 3600 * 1000;
-  for (let i = 0; i < 4; i++) {
-    const c = vs.startVerification("objetivo@cliente-ficticio.test", `10.21.0.${i}`, t + i * 3600 * 1000);
-    assert.equal(c.ok, true);
-  }
-  t += 4 * 3600 * 1000;
-  const good = vs.startVerification("objetivo@cliente-ficticio.test", "10.21.1.1", t);
-  let fails = 0;
-  for (let i = 0; i < 12; i++) {
-    const wrong = String((Number(good.code) + 1 + i) % 1_000_000).padStart(6, "0");
-    if (!vs.confirmVerification("objetivo@cliente-ficticio.test", wrong, t + i)) fails++;
-    if (i % 4 === 3) vs.startVerification("objetivo@cliente-ficticio.test", `10.21.2.${i}`, t + i);
-  }
-  assert.equal(fails, 12);
-  const late = vs.startVerification("objetivo@cliente-ficticio.test", "10.21.3.1", t + 2 * 3600 * 1000);
-  assert.equal(late.ok, true);
-  assert.equal(vs.confirmVerification("objetivo@cliente-ficticio.test", late.code, t + 2 * 3600 * 1000 + 1), null, "bloqueado por el día aun con el código correcto");
-  assert.ok(vs.confirmVerification("objetivo@cliente-ficticio.test", vs.startVerification("objetivo@cliente-ficticio.test", "10.21.4.1", t + 25 * 3600 * 1000).code, t + 25 * 3600 * 1000 + 1), "al día siguiente sí");
-  // a code that could not be emailed does not count against the per-address cap (3/hour by default)
-  const t2 = t0 + 100 * 3600 * 1000;
-  for (let i = 0; i < 5; i++) {
-    const c = vs.startVerification("rebota@cliente-ficticio.test", "10.22.0.1", t2 + i);
-    assert.equal(c.ok, true, `intento ${i}`);
-    vs.cancelVerification("rebota@cliente-ficticio.test", "10.22.0.1", c.code);
-  }
-});
-
 test("11 · /quota cuenta la sesión QA (encabezado) y la respuesta a un repetido sin token es idéntica haya o no reintento", async () => {
   const qa = "qa1@prueba.test";
   for (const q of ["mesas plegables de plástico", "carpas para eventos 3x3", "manteles de poliéster", "sillas tiffany de resina"]) await search(qa, q);

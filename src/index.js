@@ -8,10 +8,10 @@ import aiRouter from "./routes/ai.js";
 import emailRoutes from "./routes/email.js";
 import ratesRouter from "./routes/rates.js";
 import leadsRouter, { learnBase } from "./routes/leads.js";
-import { recipientConfig, emailDryRun, qaRouting } from "./services/email.js";
+import { recipientConfig, emailDryRun, qaRouting, senderStatus, checkSenderDomain } from "./services/email.js";
 import { corsOrigin, rateLimit } from "./middleware/security.js";
 import { isQa, flushQuota } from "./services/quotaStore.js";
-import { sessionVerifies } from "./services/verifyStore.js";
+import { sessionVerifies, verifyStoreStatus } from "./services/verifyStore.js";
 import { flushLeads } from "./services/leadStore.js";
 import { flushFunnel } from "./services/funnelStore.js";
 
@@ -76,7 +76,7 @@ app.get("/", (_req, res) => {
 });
 
 // the version actually running (the commit Railway built), to tell which code a test hit
-export const BACKEND_VERSION = "2026.11.02-k";
+export const BACKEND_VERSION = "2026.11.03-l";
 app.get("/health", (_req, res) => {
   res.json({
     status:          "ok",
@@ -87,6 +87,10 @@ app.get("/health", (_req, res) => {
     emailDryRun:     emailDryRun(),
     // 02-11c: whether test records have a safe destination (status only, never addresses)
     qaRouting:       qaRouting(),
+    // 02-11l: where codes, sessions and report grants live: "persistent" (shared file on the volume) or "memory"
+    verifyStore:     verifyStoreStatus(),
+    // 02-11l: sender configuration and its domain status at Resend (read-only check, statuses only)
+    emailSender:     senderStatus(),
     timestamp:       new Date().toISOString(),
   });
 });
@@ -112,6 +116,9 @@ for (const sig of ["SIGTERM", "SIGINT"]) {
 }
 
 app.listen(PORT, () => {
+  // 02-11l: read-only check of the sender's domain at Resend (no email); repeated every 6 hours
+  checkSenderDomain().then((st) => console.log(`   Email sender: ${st.from}, domain ${st.domain}`));
+  setInterval(() => void checkSenderDomain(), 6 * 60 * 60 * 1000).unref();
   console.log(`\n✅ SealCargo Backend running at http://localhost:${PORT}`);
   console.log(`   Root:         http://localhost:${PORT}/`);
   console.log(`   Health check: http://localhost:${PORT}/health`);

@@ -199,27 +199,45 @@ export function hasSearched(email) {
 // The secret comes from REPORT_SECRET, else is kept in DATA_DIR (survives deploys),
 // else lives only in memory (tokens then expire with a restart).
 let reportSecret = process.env.REPORT_SECRET || "";
+// 02-11l: whether the secret survives a restart and is the same for every process (env or volume file)
+let secretShared = !!reportSecret;
 if (!reportSecret) {
   const dir = process.env.DATA_DIR || "";
   const file = dir ? path.join(dir, "report-secret") : "";
-  try {
-    if (file && fs.existsSync(file)) reportSecret = fs.readFileSync(file, "utf8").trim();
-  } catch {
-    /* unreadable: a new one below */
-  }
+  const readIt = () => {
+    try {
+      return file && fs.existsSync(file) ? fs.readFileSync(file, "utf8").trim() : "";
+    } catch {
+      return "";
+    }
+  };
+  reportSecret = readIt();
+  secretShared = !!reportSecret;
   if (!reportSecret) {
-    reportSecret = crypto.randomBytes(32).toString("hex");
+    const fresh = crypto.randomBytes(32).toString("hex");
     try {
       // the folder may not exist yet on a fresh volume: without the file, every signed
       // link (follow-up buttons, case pages) would stop working after a restart
       if (file) {
         fs.mkdirSync(dir, { recursive: true });
-        fs.writeFileSync(file, reportSecret, { mode: 0o600 });
+        // 02-11l: created only if absent («wx»): two processes starting together end up with ONE secret
+        fs.writeFileSync(file, fresh, { mode: 0o600, flag: "wx" });
+        reportSecret = fresh;
+        secretShared = true;
       }
-    } catch {
-      /* no volume: in memory only */
+    } catch (err) {
+      if (err.code === "EEXIST") {
+        reportSecret = readIt();
+        secretShared = !!reportSecret;
+      }
     }
+    if (!reportSecret) reportSecret = fresh; // no volume: in memory only
   }
+}
+export const signingSecretShared = secretShared;
+/** A key for another use of the same secret (e.g. the verification store's hashes), never the secret itself. */
+export function deriveKey(label) {
+  return crypto.createHmac("sha256", reportSecret).update(`key:${label}`).digest();
 }
 /** A signature with the same secret (lead status links, funnel page). */
 export function sign(text) {
