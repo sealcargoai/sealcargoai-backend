@@ -132,3 +132,47 @@ Enumeración: en este motor, U+212A es el único carácter no ASCII que `toLower
 - Los correos con caracteres no ASCII en la parte local no se aceptan; reciben un mensaje claro.
 - Tras desplegar, una búsqueda hecha antes con un alias `+` fuera de Gmail necesita repetirse para enviar su informe, porque las marcas guardadas usan la clave anterior.
 - Un caso abierto antes con un alias `+` fuera de Gmail no se reconoce como repetición: se abre uno nuevo.
+
+## 02-11i — clasificación QA por identidad exacta
+
+Versión `2026.11.02-i`. Base `e535426` (producción `e0b7bf3`).
+
+**Defecto reproducido.** Con `QA_EMAILS=qa1@empresa.test`, una consulta de `qa1+compras@empresa.test` respondía 200, se marcaba `[PRUEBA]` e iba al buzón QA. Su búsqueda y su caso también iban a QA, no tenía límite de búsquedas, y su caso se separaba del flujo comercial.
+
+**Causa raíz.** `isQa()` seguía usando la clave amplia de cuotas (`emailKey`, que quita `+etiqueta` en cualquier dominio): una entrada sin `+` cubría todas sus variantes `+`.
+
+**Decisión.**
+
+| Concepto | Regla |
+|---|---|
+| Cuotas de búsqueda (`emailKey`) | Amplia, sin cambio: los alias comparten las 3 búsquedas. Las búsquedas de una cuenta QA no cuentan, así que no consumen las de un cliente |
+| Clasificación QA (`isQa` = `isQaMailbox`) | Identidad exacta (`identityKey`): solo direcciones escritas en `QA_EMAILS`, con mayúsculas y espacios normalizados. Fuera de Gmail, `qa1@` no cubre `qa1+compras@`. Un alias listado expresamente es QA solo él, sin la base ni otros alias. En gmail.com y googlemail.com los puntos y el `+` son la misma cuenta (regla documentada por Google). No hay regla para Workspace ni para otros dominios |
+| Búsqueda registrada, token, destinatario QA y deduplicación | La misma identidad exacta (02-11h) |
+| Topes diarios de informes | Un informe real conserva la clave amplia, para que los alias no multipliquen los topes. Un informe QA cuenta por identidad exacta con prefijo `qa:`. **Defecto adicional corregido:** las pruebas de `qa1@` consumían el tope del destinatario real `qa1+compras@` (misma clave) y lo dejaban en 429 |
+
+**Pruebas.** `test/qa-identidad-exacta.test.mjs` (9), con tres servidores reales y Resend simulado:
+- el caso reproducido: consulta, búsqueda y caso van a ventas sin `[PRUEBA]`;
+- el alias conserva sus límites normales y la cuenta QA no los consume;
+- `qa1@` y `qa1+otro@` no comparten búsqueda ni token;
+- la cuenta QA no saca informes a externos, a ventas, a alias no listados ni a direcciones invisibles. Se rechaza antes de PDF, Resend y límites;
+- el alias no listado envía su informe por el flujo comercial y su tope no lo consume QA;
+- Gmail sí une puntos y `+`;
+- los casos real y QA no se fusionan;
+- un alias listado expresamente es QA solo él, y el reenvío de su informe va solo a QA;
+- logs sin direcciones.
+
+Se ajustaron las pruebas anteriores que suponían que `+etiqueta` era QA: `qa-isolation`, `recipients`, `qa-recipient-exact`, `qa-report-isolation`, `qa-revision-final` y `qa-identidad-segura`.
+
+**Comprobación.**
+
+| Código o cambio | Pruebas nuevas que fallan |
+|---|---|
+| Código publicado `e535426` | 4 (caso reproducido, límites, informe real del alias, fusión de casos) |
+| `isQa` con `emailKey` | 5 |
+| Token y búsqueda con `emailKey` | 1 |
+| Deduplicación con `emailKey` | 1 |
+| Topes de informe con la clave amplia también para QA | 1 |
+
+**Limitaciones.**
+- Un tester que use `qa1+algo@` sin listarlo en `QA_EMAILS` se trata como cliente real: sus mensajes llegan a ventas, sin `[PRUEBA]`. Cada alias de prueba debe escribirse en `QA_EMAILS`.
+- Quien conozca una dirección QA puede buscar sin límite. Es un problema que ya existía y requiere verificar el correo.
