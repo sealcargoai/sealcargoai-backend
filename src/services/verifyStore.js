@@ -1,5 +1,5 @@
 // Proof that a person controls an email address (02-11k; shared store and abuse controls since 02-11l/m).
-// An 8-character code (32 symbols: A–Z without I/O, 2–9; about 40 bits) is emailed to the address.
+// A 10-character code (32 symbols: A–Z without I/O, 2–9; about 50 bits) is emailed to the address.
 // Entering it returns two random credentials:
 //   · session     (12 h): «this browser verified this mailbox», which lets a QA account skip search limits
 //   · reportGrant (30 min, ONE use): authorizes one report email to that same mailbox
@@ -20,8 +20,8 @@
 //     in the last hour and has not been locked for wrong codes still gets a code, up to 12 per hour
 //   · 10 per hour per IP; 300 per hour for the whole service; 30,000 tracked keys
 //   · a new code never cancels an earlier one: every code sent in the last 15 minutes stays valid
-//   · wrong codes lock only the (address, IP) that typed them: 5 per hour. There is NO lock per address:
-//     with 40-bit codes a brute force needs ~10^11 guesses, and a lock per address was a way for a third
+//   · wrong codes lock only the (address, IP) that typed them: 5 per hour. There is NO lock per address
+//     (a lock per address was a way for a third
 //     party to keep the owner out (02-11m review). No daily cap per address either (a cap that lasts a day
 //     was the same kind of lever); the hourly caps bound the volume a third party can send.
 import crypto from "node:crypto";
@@ -45,8 +45,10 @@ export class VerifyStoreError extends Error {
   }
 }
 
-// 32 symbols without look-alikes (no I, O, 0, 1): 8 of them ≈ 40 bits
-const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+// 32 symbols without look-alikes (no I, O, 0, 1). 02-11n: 10 of them ≈ 50 bits (it was 8 ≈ 40 bits: the
+// risk note of 02-11m understated the brute-force bound; see scripts/riesgo-codigos.mjs)
+export const CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+export const CODE_LENGTH = 10;
 /** What the person typed → the canonical code: uppercase, without spaces or dashes. */
 export const normalizeCode = (x) => String(x || "").toUpperCase().replace(/[\s-]/g, "");
 const randomToken = () => crypto.randomBytes(32).toString("base64url");
@@ -234,7 +236,7 @@ export function createVerifyStore({ dir = "", secret, env = process.env } = {}) 
         for (const k of [AI, A, I, "g"]) (s.sent[k] = s.sent[k] || []).push(now);
         // SEAL's own sales addresses: counted like any other, but no code exists (nothing to guess)
         if (noCode) return { ok: true, code: "" };
-        const code = Array.from({ length: 8 }, () => CODE_ALPHABET[crypto.randomInt(0, CODE_ALPHABET.length)]).join("");
+        const code = Array.from({ length: CODE_LENGTH }, () => CODE_ALPHABET[crypto.randomInt(0, CODE_ALPHABET.length)]).join("");
         (s.codes[A] = s.codes[A] || []).push({ c: h(`${identity}|${code}`), exp: now + L.codeMs, ai: AI, i: I, t: now });
         return { ok: true, code };
       });
@@ -335,6 +337,18 @@ export function createVerifyStore({ dir = "", secret, env = process.env } = {}) 
         return true;
       });
     },
+  };
+}
+
+/** 02-11n: the parameters the brute-force bound depends on (scripts/riesgo-codigos.mjs, test/riesgo-codigos). */
+export function codeRiskParams(env = process.env) {
+  const L = createVerifyStore({ secret: Buffer.from("params"), env }).limits;
+  return {
+    alphabet: CODE_ALPHABET.length,
+    length: CODE_LENGTH,
+    codeMinutes: L.codeMs / MIN,
+    maxCodesPerHour: L.perAddressHardHour,
+    failsPerIpHour: L.failsPerAddressIpHour,
   };
 }
 
