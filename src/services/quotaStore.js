@@ -16,12 +16,6 @@ const EMAIL_RE = /^[^\s@<>"',;]+@[^\s@<>"',;]+\.[a-z]{2,}$/i;
 
 export { SEARCH_LIMIT, IP_SEARCH_LIMIT };
 
-const QA = new Set(
-  String(process.env.QA_EMAILS || "")
-    .split(",")
-    .map((e) => emailKey(e))
-    .filter(Boolean),
-);
 
 /** A valid email (max 254 chars), lowercase and trimmed; "" otherwise. */
 export function normalizeEmail(value) {
@@ -43,7 +37,6 @@ export function emailKey(value) {
   return `${user}@${domain}`;
 }
 
-export const isQa = (email) => !!email && QA.has(emailKey(email));
 
 // ── 02-11f: the MAILBOX an address is delivered to, for AUTHORIZING a recipient ─────────────
 // emailKey() above is broad on purpose (quota and identification: "ana+1@x" shares Ana's searches),
@@ -54,6 +47,11 @@ export const isQa = (email) => !!email && QA.has(emailKey(email));
 // the same inbox). Any other alias is accepted only when it is itself written in the allow-list.
 const GMAIL = new Set(["gmail.com", "googlemail.com"]);
 export function mailboxAddress(value) {
+  // 02-11g: ASCII only. toLowerCase() folds some non-ASCII letters into ASCII ones (the Kelvin sign
+  // «\u212A» becomes «k»), so «\u212Aa@dominio» compared as «ka@dominio» while the provider was handed
+  // the original, a different mailbox. No QA address needs non-ASCII: such an address is never authorized.
+  // (checked on the input BEFORE lowercasing, which is what folds those letters)
+  if (typeof value !== "string" || /[^\x21-\x7e]/.test(value.trim())) return "";
   const v = normalizeEmail(value);
   if (!v) return "";
   const at = v.lastIndexOf("@");
@@ -71,6 +69,29 @@ const QA_MAILBOXES = new Set(
 );
 /** A QA account written in QA_EMAILS, compared by exact mailbox (see mailboxAddress). */
 export const isQaMailbox = (email) => !!email && QA_MAILBOXES.has(mailboxAddress(email));
+
+// ── QA classification (who IS a QA account: isolation of its emails, no search limits) ──────────
+// An entry written without «+» (qa1@dominio) also covers its «+» variants (qa1+x@dominio is the same
+// person: the variant stays isolated). 02-11g: an entry written WITH «+» outside Gmail
+// (juan+qa@empresa) covers only that alias: it used to turn the base address juan@empresa, possibly a
+// real client, into a QA account (its cases and notices went to the QA inbox instead of sales).
+const QA_CLASS = new Map(); // emailKey -> null (base entry: broad) | Set of exact aliases
+for (const raw of String(process.env.QA_EMAILS || "").split(",")) {
+  const key = emailKey(raw);
+  if (!key) continue;
+  const exact = mailboxAddress(raw);
+  const alias = !!exact && exact !== key && exact.split("@")[0].includes("+");
+  const prev = QA_CLASS.get(key);
+  if (!alias) QA_CLASS.set(key, null);
+  else if (prev !== null) QA_CLASS.set(key, new Set([...(prev || []), exact]));
+}
+export const isQa = (email) => {
+  if (!email) return false;
+  const key = emailKey(email);
+  if (!QA_CLASS.has(key)) return false;
+  const aliases = QA_CLASS.get(key);
+  return aliases === null || aliases.has(mailboxAddress(email));
+};
 
 // email key -> { count, pending }
 const emails = new Map();
