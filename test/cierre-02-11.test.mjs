@@ -25,7 +25,7 @@ function server(portBase, extraEnv = {}) {
           LEADS_EMAIL: "ventas@example.test",
           QA_LEADS_EMAIL: "qa-inbox@example.test",
           QA_NOTIFY_EMAILS: "qa-dev@example.test",
-          QA_EMAILS: "qa1@prueba.test",
+          QA_EMAILS: "qa1@prueba.test,qa2@prueba.test", // 02-11e: a QA report goes only to a QA account
           ADMIN_EMAIL: "",
           ADMIN2_EMAIL: "",
           PUBLIC_API_URL: "",
