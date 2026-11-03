@@ -6,6 +6,11 @@ let n = 0;
 globalThis.fetch = async (url, opt = {}) => {
   if (String(url).includes("api.resend.com")) {
     const json = (o, status = 200) => new Response(JSON.stringify(o), { status, headers: { "content-type": "application/json" } });
+    if ((opt.method || "GET").toUpperCase() === "GET" && /\/domains\/?$/.test(String(url))) {
+      // 02-11l: read-only domain list (FAKE_DOMAINS = JSON array of {name,status}; FAKE_DOMAINS_DENIED=1 → 401)
+      if (process.env.FAKE_DOMAINS_DENIED === "1") return json({ name: "restricted_api_key", message: "restricted", statusCode: 401 }, 401);
+      return json({ object: "list", data: JSON.parse(process.env.FAKE_DOMAINS || "[]") });
+    }
     if ((opt.method || "GET").toUpperCase() === "GET") {
       const id = String(url).split("/").pop();
       return json({ object: "email", id, last_event: process.env.FAKE_EVENT || "delivered" });
