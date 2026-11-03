@@ -11,7 +11,7 @@ import {
 import { registerLead, markNotified, leadsPersistent } from "../services/leadStore.js";
 import { linksFor, baseUrl, caseLink } from "./leads.js";
 import { isEmail, unsupportedEmail, clean, quantityError, budgetError, malformedFields } from "../middleware/security.js";
-import { hasSearched, emailKey, verifyReportToken } from "../services/quotaStore.js";
+import { hasSearched, emailKey, identityKey, verifyReportToken } from "../services/quotaStore.js";
 
 // Reports go out from SEAL's address: only someone who ran a search may send
 // one, and each recipient gets a few per day (no open relay)
@@ -183,8 +183,11 @@ router.post("/report", async (req, res) => {
       console.warn(`⚠️ /email/report: QA report refused (${routing.error}); nothing sent, no limit counted`);
       return res.status(routing.status).json({ error: routing.error });
     }
-    const toKey = emailKey(recipientEmail);
-    const byKey = emailKey(requester);
+    // daily caps: real reports keep the broad key (aliases can't multiply them); 02-11i: a QA operation
+    // counts under its own exact identities, so QA testing never uses up the caps of a real client who
+    // shares part of the address («qa1@» QA and the client «qa1+compras@» used to share both caps)
+    const toKey = routing.test ? `qa:${identityKey(recipientEmail)}` : emailKey(recipientEmail);
+    const byKey = routing.test ? `qa:${identityKey(requester)}` : emailKey(requester);
     if (!underCap(sentTo, toKey, 3) || !underCap(sentBy, byKey, 10)) {
       return res.status(429).json({ error: "report_limit", message: "Too many reports sent today." });
     }
