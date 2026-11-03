@@ -136,12 +136,12 @@ test("servidor · cada rechazo: 403/400 sin direcciones, CERO llamadas a Resend 
   assert.equal((await report(OK, { recipientEmail: "qa1@prueba.test", requesterEmail: "qa1@prueba.test", reportToken: tok }, ip())).status, 429);
 });
 
-test("servidor · solicitante QA con alias «+», destinatario no textual o demasiado largo → rechazado sin llamar a Resend", async () => {
-  // the REQUESTER is identified broadly (quota rule): «QA1+x@» is still the QA account, so its report
-  // stays isolated (an exact rule here would have turned it into a commercial send to anyone)
-  const tok = await token(OK, "QA1+x@prueba.test", "10.7.9.6");
+test("servidor · solicitante QA en mayúsculas, destinatario no textual o demasiado largo → rechazado sin llamar a Resend", async () => {
+  // 02-11i: the requester is identified by exact identity (case and outer spaces only): «QA1@PRUEBA.TEST»
+  // is the QA account and stays isolated; «qa1+x@» is a different (non-QA) account, see qa-identidad-exacta
+  const tok = await token(OK, "QA1@PRUEBA.TEST", "10.7.9.6");
   const before = OK.attempts().length;
-  const r = await report(OK, { recipientEmail: "cliente@empresa.gt", requesterEmail: "QA1+x@prueba.test", reportToken: tok }, ip());
+  const r = await report(OK, { recipientEmail: "cliente@empresa.gt", requesterEmail: "qa1@prueba.test", reportToken: tok }, ip());
   assert.equal(r.status, 403);
   for (const bad of [["qa1@prueba.test"], { to: "qa1@prueba.test" }, 12345])
     assert.equal((await report(OK, { recipientEmail: bad, requesterEmail: "qa1@prueba.test", reportToken: tok }, ip())).status, 400, JSON.stringify(bad));

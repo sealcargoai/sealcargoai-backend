@@ -50,7 +50,7 @@ export function emailKey(value) {
 
 
 // ── 02-11f: the MAILBOX an address is delivered to, for AUTHORIZING a recipient ─────────────
-// emailKey() above is broad on purpose (quota and identification: "ana+1@x" shares Ana's searches),
+// emailKey() above is broad on purpose, for QUOTAS only ("ana+1@x" shares Ana's searches),
 // but it must never decide who may RECEIVE something: whether «+etiqueta» reaches the base mailbox
 // depends on each domain, and dots only don't matter at Gmail. So an authorization compares the
 // exact address (trimmed, lowercase). The only domain rule applied is Google's documented one for
@@ -88,27 +88,12 @@ export const identityKey = (email) => mailboxAddress(email);
 export const isQaMailbox = (email) => !!email && QA_MAILBOXES.has(mailboxAddress(email));
 
 // ── QA classification (who IS a QA account: isolation of its emails, no search limits) ──────────
-// An entry written without «+» (qa1@dominio) also covers its «+» variants (qa1+x@dominio is the same
-// person: the variant stays isolated). 02-11g: an entry written WITH «+» outside Gmail
-// (juan+qa@empresa) covers only that alias: it used to turn the base address juan@empresa, possibly a
-// real client, into a QA account (its cases and notices went to the QA inbox instead of sales).
-const QA_CLASS = new Map(); // emailKey -> null (base entry: broad) | Set of exact aliases
-for (const raw of String(process.env.QA_EMAILS || "").split(",")) {
-  const key = emailKey(raw);
-  if (!key) continue;
-  const exact = mailboxAddress(raw);
-  const alias = !!exact && exact !== key && exact.split("@")[0].includes("+");
-  const prev = QA_CLASS.get(key);
-  if (!alias) QA_CLASS.set(key, null);
-  else if (prev !== null) QA_CLASS.set(key, new Set([...(prev || []), exact]));
-}
-export const isQa = (email) => {
-  if (!email) return false;
-  const key = emailKey(email);
-  if (!QA_CLASS.has(key)) return false;
-  const aliases = QA_CLASS.get(key);
-  return aliases === null || aliases.has(mailboxAddress(email));
-};
+// 02-11i: by exact identity, the same one that authorizes (identityKey). An entry «qa1@dominio» is
+// only qa1@dominio: «qa1+compras@dominio» is NOT a QA account unless it is itself written in
+// QA_EMAILS (whether «+etiqueta» reaches qa1@ depends on each domain; it used to be assumed through the
+// broad quota key, and a real lead «qa1+compras@» went to the QA inbox as [PRUEBA]). Gmail's documented
+// rule still applies (identityKey), so at gmail.com / googlemail.com dots and «+» are the same account.
+export const isQa = (email) => isQaMailbox(email);
 
 // email key -> { count, pending }
 const emails = new Map();
