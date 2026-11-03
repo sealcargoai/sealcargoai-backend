@@ -2,6 +2,38 @@ import { Resend } from "resend";
 import { escapeHtml as e } from "../middleware/security.js";
 import { isQa, isQaMailbox, emailKey, mailboxAddress } from "./quotaStore.js";
 
+// ── 02-11l: sender status, read-only, for /health (never the address, the key or the domain name) ──
+// from:   "custom" (RESEND_FROM set to another domain) | "resend-test-sender" (onboarding@resend.dev, which
+//         Resend only lets deliver to the account owner) | "invalid"
+// domain: the status Resend reports for the sender's domain via GET /domains (no email is sent):
+//         "verified" | "pending" | "failed" | "temporary_failure" | "not_started" | "not_found" |
+//         "no_access" (the API key cannot read domains, e.g. a sending-only key) | "unknown"
+const fromDomain = () => (String(FROM_EMAIL).match(/@([^\s>]+)>?\s*$/)?.[1] || "").toLowerCase();
+let senderCheck = { domain: "unknown", at: 0 };
+export function senderStatus() {
+  const d = fromDomain();
+  return { from: !d ? "invalid" : d === "resend.dev" ? "resend-test-sender" : "custom", domain: senderCheck.domain };
+}
+export async function checkSenderDomain() {
+  const d = fromDomain();
+  if (emailDryRun() || !process.env.RESEND_API_KEY || !d || d === "resend.dev") return senderStatus();
+  try {
+    const ctl = AbortSignal.timeout(6000);
+    const res = await fetch("https://api.resend.com/domains", { headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}` }, signal: ctl });
+    if (res.status === 401 || res.status === 403) senderCheck = { domain: "no_access", at: Date.now() };
+    else if (!res.ok) senderCheck = { domain: "unknown", at: Date.now() };
+    else {
+      const list = (await res.json())?.data || [];
+      // exactly the sender's domain (a sending subdomain is verified on its own at Resend)
+      const hit = list.find((x) => typeof x?.name === "string" && d === x.name.toLowerCase());
+      senderCheck = { domain: hit ? String(hit.status || "unknown") : "not_found", at: Date.now() };
+    }
+  } catch {
+    senderCheck = { domain: "unknown", at: Date.now() };
+  }
+  return senderStatus();
+}
+
 /* ─────────────────────────────────────────────
    Safe Resend Client Creator
 ───────────────────────────────────────────── */
