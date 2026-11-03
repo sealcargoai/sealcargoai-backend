@@ -8,7 +8,7 @@ import aiRouter from "./routes/ai.js";
 import emailRoutes from "./routes/email.js";
 import ratesRouter from "./routes/rates.js";
 import leadsRouter, { learnBase } from "./routes/leads.js";
-import { recipientConfig, emailDryRun } from "./services/email.js";
+import { recipientConfig, emailDryRun, qaRouting } from "./services/email.js";
 import { corsOrigin, rateLimit } from "./middleware/security.js";
 import { isQa, flushQuota } from "./services/quotaStore.js";
 import { flushLeads } from "./services/leadStore.js";
@@ -70,7 +70,7 @@ app.get("/", (_req, res) => {
 });
 
 // the version actually running (the commit Railway built), to tell which code a test hit
-export const BACKEND_VERSION = "2026.11.02-a";
+export const BACKEND_VERSION = "2026.11.02-c";
 app.get("/health", (_req, res) => {
   res.json({
     status:          "ok",
@@ -79,6 +79,8 @@ app.get("/health", (_req, res) => {
     commit:          String(process.env.RAILWAY_GIT_COMMIT_SHA || "").slice(0, 7) || undefined,
     // true = this server cannot send email (staging / preview / tests)
     emailDryRun:     emailDryRun(),
+    // 02-11c: whether test records have a safe destination (status only, never addresses)
+    qaRouting:       qaRouting(),
     timestamp:       new Date().toISOString(),
   });
 });
@@ -110,5 +112,9 @@ app.listen(PORT, () => {
   console.log(`   Suppliers:    http://localhost:${PORT}/api/suppliers/test`);
   // counts only: no addresses in the logs
   const rc = recipientConfig();
-  console.log(`   Recipients:   real → ${rc.commercial} commercial${rc.devGetsReal ? ` + ${rc.devCopies} dev (authorized)` : ""}; tests → ${rc.qaInbox ? "QA inbox" : "commercial"} + ${rc.devCopies} dev\n`);
+  console.log(`   Recipients:   real → ${rc.commercial} commercial${rc.devGetsReal ? ` + ${rc.devCopies} dev (authorized)` : ""}; tests → ${rc.qaRouting === "ok" ? `QA inbox + ${rc.devCopies} dev` : "NOT SENT"}`);
+  // 02-11c: startup check of the QA routing (status only, no addresses)
+  if (rc.qaRouting !== "ok")
+    console.warn(`⚠️  QA routing ${rc.qaRouting}: test records (QA_EMAILS) will be refused with 503 qa_routing_unavailable and never emailed. Set QA_LEADS_EMAIL to a QA inbox that is not a commercial address.\n`);
+  else console.log("");
 });
