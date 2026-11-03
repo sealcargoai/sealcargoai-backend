@@ -3,8 +3,8 @@ import {
   sendLeadNotification,
   sendReportToUser,
   sendCaseToSeal,
-  testTag,
   isTestRecord,
+  qaRouting,
   scrubEmails,
 } from "../services/email.js";
 import { registerLead, markNotified, leadsPersistent } from "../services/leadStore.js";
@@ -44,10 +44,12 @@ router.post("/lead", async (req, res) => {
       return res.status(400).json({ error: "invalid email" });
     }
 
+    // 02-11c: a QA account's notice goes only to the QA inbox; without QA routing nothing is sent
+    if (isTestRecord(email) && qaRouting() !== "ok") return res.status(503).json({ error: "qa_routing_unavailable" });
     await sendLeadNotification({ name, email, query });
     res.json({ success: true });
   } catch (err) {
-    console.error("❌ /email/lead:", err.message);
+    console.error("❌ /email/lead:", scrubEmails(err.message));
     res.status(500).json({ error: "Could not send email" });
   }
 });
@@ -80,6 +82,9 @@ router.post("/quote", async (req, res) => {
     if (!contact.name || !isEmail(contact.email)) {
       return res.status(400).json({ error: "name and a valid email are required" });
     }
+    // 02-11c: a test (QA account) is never registered or emailed when the QA inbox is not configured
+    // correctly: it would otherwise have no safe destination (it used to fall back to sales)
+    if (isTestRecord(contact.email) && qaRouting() !== "ok") return res.status(503).json({ error: "qa_routing_unavailable" });
     const caseData = {
       // the client's own words first; the category ("ppe") only as a last resort
       // the whole description the client wrote (voltage, capacity, material… are part of the case)
@@ -117,7 +122,7 @@ router.post("/quote", async (req, res) => {
       intent: clean(b.intent, 60),
       requestType: clean(b.requestType, 80) || "Solicitud de cotización",
       lang: b.lang,
-      test: isTestRecord(contact.name, contact.email),
+      test: isTestRecord(contact.email),
     });
     // an identical repeat of an open case is not emailed again (unless the first email
     // failed); a repeat with new information goes to SEAL as an update of the same case
@@ -140,7 +145,7 @@ router.post("/quote", async (req, res) => {
     // test: the site doesn't count it as a commercial lead (analytics)
     res.json({ success: true, id: lead.id, duplicate, notified: notified !== false, test: !!lead.test, caseUrl: caseLink(lead, baseUrl(req)) });
   } catch (err) {
-    console.error("❌ /email/quote:", err.message);
+    console.error("❌ /email/quote:", scrubEmails(err.message));
     res.status(500).json({ error: "Could not send email" });
   }
 });
@@ -157,6 +162,7 @@ router.post("/report", async (req, res) => {
     if (!isEmail(requester) || !hasSearched(requester) || !verifyReportToken(requester, b.reportToken)) {
       return res.status(403).json({ error: "report_not_allowed", message: "Only the person who ran the search can send this report." });
     }
+    if (isTestRecord(recipientEmail, requester) && qaRouting() !== "ok") return res.status(503).json({ error: "qa_routing_unavailable" });
     const toKey = emailKey(recipientEmail);
     const byKey = emailKey(requester);
     if (!underCap(sentTo, toKey, 3) || !underCap(sentBy, byKey, 10)) {
@@ -192,7 +198,7 @@ router.post("/report", async (req, res) => {
     });
     res.json({ success: true, delivered: result.delivered, forwarded: !!result.forwarded });
   } catch (err) {
-    console.error("❌ /email/report:", err.message);
+    console.error("❌ /email/report:", scrubEmails(err.message));
     res.status(500).json({ error: "Could not send email" });
   }
 });
