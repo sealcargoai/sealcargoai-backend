@@ -7,7 +7,7 @@ import crypto from "node:crypto";
 //   that open links can't change a case).
 // - /api/leads/funnel: visits → queries → results → requests → qualified → quotes → clients.
 import express from "express";
-import { escapeHtml as e, clean } from "../middleware/security.js";
+import { escapeHtml as e, clean, clientIp } from "../middleware/security.js";
 import { sign, verifySigned } from "../services/quotaStore.js";
 import { getLead, updateLead, leadFunnel, dueForReminder, markReminded, GROUP_COMPANIES } from "../services/leadStore.js";
 import { recordEvent, eventTotals } from "../services/funnelStore.js";
@@ -78,8 +78,9 @@ router.use("/leads", (_req, res, next) => {
 // ── anonymous funnel events ────────────────────────────────────────────────
 router.post("/events", (req, res) => {
   const b = req.body || {};
-  // QA sessions are counted apart: they never inflate the commercial funnel
-  recordEvent(clean(b.event, 40), clean(b.vid, 64), Date.now(), b.qa === true);
+  // QA sessions are counted apart: they never inflate the commercial funnel. 02-11k: only top-of-funnel
+  // events, at most a few per IP and day; conversions are counted by the server, not reported here
+  recordEvent(clean(b.event, 40), clean(b.vid, 64), Date.now(), b.qa === true, { ip: clientIp(req) });
   res.status(204).end();
 });
 
@@ -236,7 +237,7 @@ router.get("/leads/funnel", (req, res) => {
         <tr><td>Casos cuyo correo a SEAL falló (revisar)</td><td class="n">${lf.sinNotificar}</td></tr>
         <tr><td>Contactados / descartados</td><td class="n">${lf.contactados} / ${lf.descartados}</td></tr>
       </table></div>
-      <p class="muted">Visitas, consultas y resultados se cuentan una vez por navegador y día. Calificados, cotizaciones y clientes se registran a mano desde el correo de cada caso. Excluye registros y sesiones de prueba. Destinatarios: casos reales → ${rc.commercial} buzón(es) comercial(es)${rc.devGetsReal ? ` + ${rc.devCopies} copia(s) de desarrollo (autorizado)` : ""}; pruebas (solo cuentas QA) → ${rc.qaRouting === "ok" ? `buzón QA + ${rc.devCopies} copia(s) de desarrollo` : "no se envían (falta configurar el buzón QA)"}. <a href="?t=${e(clean(req.query.t, 64))}&days=7">7 días</a> · <a href="?t=${e(clean(req.query.t, 64))}&days=30">30 días</a> · <a href="?t=${e(clean(req.query.t, 64))}&days=90">90 días</a></p>`,
+      <p class="muted">Visitas, consultas y resultados los reporta el navegador (son aproximados: se cuentan una vez por navegador y día, con tope por IP). Las solicitudes y etapas siguientes salen del registro de casos del servidor. Calificados, cotizaciones y clientes se registran a mano desde el correo de cada caso. Excluye registros y sesiones de prueba. Destinatarios: casos reales → ${rc.commercial} buzón(es) comercial(es)${rc.devGetsReal ? ` + ${rc.devCopies} copia(s) de desarrollo (autorizado)` : ""}; pruebas (solo cuentas QA) → ${rc.qaRouting === "ok" ? `buzón QA + ${rc.devCopies} copia(s) de desarrollo` : "no se envían (falta configurar el buzón QA)"}. <a href="?t=${e(clean(req.query.t, 64))}&days=7">7 días</a> · <a href="?t=${e(clean(req.query.t, 64))}&days=30">30 días</a> · <a href="?t=${e(clean(req.query.t, 64))}&days=90">90 días</a></p>`,
     ),
   );
 });

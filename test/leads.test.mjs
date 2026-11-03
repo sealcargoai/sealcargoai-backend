@@ -72,8 +72,11 @@ test("a request is registered with a case number and SEAL gets the whole context
 test("the same person, product and supplier again is the same case: no duplicate, no second email", async () => {
   const r = await post("/api/email/quote", { ...CASE, email: "Ana.Perez@Empresa.com.gt" }, "10.0.0.2");
   const j = await r.json();
-  assert.equal(j.id, first.id);
+  // 02-11k: without the case token a repeat changes nothing and hands out no case number or link
   assert.equal(j.duplicate, true);
+  assert.equal(j.unchanged, true);
+  assert.equal(j.id, undefined);
+  assert.equal(j.caseUrl, undefined);
   assert.equal(mails().length, 1);
 });
 
@@ -131,7 +134,7 @@ test("funnel: events once per browser and day; requests and later stages from th
   assert.equal(j.stages["Cotizaciones"], 1);
   assert.equal(j.stages["Clientes"], 1);
   assert.equal(j.events.whatsapp_clic, 1);
-  assert.equal(j.leads.repetidasAgrupadas, 1);
+  assert.equal(j.leads.repetidasAgrupadas, 0, "02-11k: a repeat without the case token is not even counted");
   assert.equal((await fetch(`${BASE}/api/leads/funnel?t=bad`)).status, 404);
 });
 
@@ -152,8 +155,9 @@ test("if the email to SEAL fails the case is kept, reported as not notified, and
   await stop(srv);
   srv = await start();
   const k = await (await post("/api/email/quote", { ...CASE, product: "Sillas plásticas", productDescription: "Sillas plásticas", supplierName: "", supplierUrl: "" }, "10.0.0.8")).json();
-  assert.equal(k.id, j.id);
-  assert.equal(k.notified, true);
+  // 02-11k: the repeat changes nothing, but the ORIGINAL case email that failed is retried
+  assert.equal(k.unchanged, true);
+  assert.equal(k.notified, undefined, "the answer says nothing about that case's email");
   assert.equal(mails().length, 3);
 });
 
@@ -194,7 +198,9 @@ test("the same case with new information: same number, SEAL gets one update emai
   const base = { ...CASE, product: "Lámparas LED", productDescription: "Lámparas LED", supplierName: "Shenzhen Lamp", supplierUrl: "" };
   const firstCase = await (await post("/api/email/quote", base, "10.0.0.24")).json();
   const n = mails().length;
-  const j = await (await post("/api/email/quote", { ...base, message: "Cambió el precio", price: "US$2.40 por pieza", priceSource: "usuario" }, "10.0.0.22")).json();
+  // 02-11k: the owner proves control of the case with its case token (from the case link)
+  const caseAuth = [`${firstCase.id}:${new URL(firstCase.caseUrl).searchParams.get("t")}`];
+  const j = await (await post("/api/email/quote", { ...base, caseAuth, message: "Cambió el precio", price: "US$2.40 por pieza", priceSource: "usuario" }, "10.0.0.22")).json();
   assert.equal(j.id, firstCase.id);
   assert.equal(j.duplicate, true);
   assert.equal(mails().length, n + 1);
@@ -203,7 +209,7 @@ test("the same case with new information: same number, SEAL gets one update emai
   assert.match(m.html, /Actualización del mismo caso/);
   assert.match(m.html, /precio, origen del precio, mensaje|mensaje.*precio|precio.*mensaje/);
   // sent again unchanged: nothing new, no email
-  await post("/api/email/quote", { ...base, message: "Cambió el precio", price: "US$2.40 por pieza", priceSource: "usuario" }, "10.0.0.23");
+  await post("/api/email/quote", { ...base, caseAuth, message: "Cambió el precio", price: "US$2.40 por pieza", priceSource: "usuario" }, "10.0.0.23");
   assert.equal(mails().length, n + 1);
 });
 

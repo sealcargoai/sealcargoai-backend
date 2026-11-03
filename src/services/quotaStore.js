@@ -123,8 +123,10 @@ function emailEntry(key, create = true) {
 }
 
 /** Why a search can't run now: "email", "ip" or "" (counting searches in progress). */
-export function limitReason(email, ip) {
-  if (isQa(email)) return "";
+// 02-11k: a QA account skips the limits only with `qaVerified` (a verified session for that same address):
+// typing a QA address is not enough (anyone who knew one got unlimited searches)
+export function limitReason(email, ip, qaVerified = false) {
+  if (qaVerified && isQa(email)) return "";
   const key = emailKey(email);
   if (key) {
     const e = emailEntry(key, false);
@@ -135,8 +137,8 @@ export function limitReason(email, ip) {
   return "";
 }
 
-export function remainingSearches(email, ip) {
-  if (isQa(email)) return SEARCH_LIMIT;
+export function remainingSearches(email, ip, qaVerified = false) {
+  if (qaVerified && isQa(email)) return SEARCH_LIMIT;
   const key = emailKey(email);
   const e = key ? emailEntry(key, false) : { count: 0, pending: 0 };
   const i = ipEntry(ip, false);
@@ -148,9 +150,9 @@ export function remainingSearches(email, ip) {
  * search showed results: it counts) and release() (it didn't: give it back),
  * or null when the limit is reached.
  */
-export function reserveSearch(email, ip) {
-  if (limitReason(email, ip)) return null;
-  const qa = isQa(email);
+export function reserveSearch(email, ip, qaVerified = false) {
+  if (limitReason(email, ip, qaVerified)) return null;
+  const qa = qaVerified && isQa(email);
   const key = emailKey(email);
   // 02-11h: the search is recorded for the IDENTITY that ran it (not the quota key): only that exact
   // mailbox can later send its report
@@ -193,9 +195,7 @@ export function hasSearched(email) {
   return !!at && Date.now() - at < 7 * 24 * 60 * 60 * 1000;
 }
 
-// ── Report token: proof that this browser ran the search for this email ─────
-// Knowing someone's email is not enough to send a "SEAL report" in their name: the
-// search response carries a signed token and /api/email/report requires it.
+// ── Signing secret (case links, funnel page) ─────
 // The secret comes from REPORT_SECRET, else is kept in DATA_DIR (survives deploys),
 // else lives only in memory (tokens then expire with a restart).
 let reportSecret = process.env.REPORT_SECRET || "";
@@ -229,18 +229,8 @@ export function verifySigned(text, token) {
   const want = sign(text);
   return typeof token === "string" && token.length === want.length && crypto.timingSafeEqual(Buffer.from(want), Buffer.from(token));
 }
-export function reportToken(email) {
-  // 02-11h: bound to the identity (exact mailbox), not the quota key: the token of «qa1+x@dominio»
-  // or of a Unicode look-alike is not the token of «qa1@dominio»
-  const id = identityKey(email);
-  if (!id) return "";
-  return crypto.createHmac("sha256", reportSecret).update(`report:${id}`).digest("base64url").slice(0, 32);
-}
-export function verifyReportToken(email, token) {
-  const want = reportToken(email);
-  if (!want || typeof token !== "string" || token.length !== want.length) return false;
-  return crypto.timingSafeEqual(Buffer.from(want), Buffer.from(token));
-}
+// 02-11k: the deterministic «report token» handed out by searches was removed: a report now
+// needs a single-use grant obtained by proving control of the mailbox (services/verifyStore.js).
 
 // ── Housekeeping: expired IP windows and old "searched" marks are dropped ──
 setInterval(() => {

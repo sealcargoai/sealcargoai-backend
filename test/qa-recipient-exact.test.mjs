@@ -8,6 +8,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { server } from "./fixtures/qa-server.mjs";
+import { verifyEmail } from "./fixtures/verify.mjs";
 
 const QA_ENV = {
   // con espacios y mayúsculas a propósito; «qa+informes@» es un alias configurado EXPRESAMENTE
@@ -85,102 +86,65 @@ test("tabla · un cliente real sigue siendo una operación comercial", () => {
 });
 
 // ── Parte 2 ─────────────────────────────────────────────────────────────────────────────────
+// 02-11k: a report goes only to the requester's own mailbox, proved with a code (one-use grant). The QA
+// recipient rule above still applies to that mailbox (a QA requester must be a listed QA address).
 const OK = server(6700, QA_ENV);
-const FAILTO = server(6900, { ...QA_ENV, RESEND_FAIL_TO: "^(qa\\.dos@prueba\\.test|rechazada@cliente\\.gt)$" });
-// a fresh server for the accepted sends: test 5 filled qa1@'s 3-a-day cap on OK on purpose
-const FRESH = server(7100, QA_ENV);
-// and one for the concurrency test (its caps start empty)
+const FAILTO = server(6900, { ...QA_ENV, RESEND_FAIL_TO: "^(qa\\.dos@prueba\\.test|rechazada@cliente\\.gt)$", RESEND_FAIL_SUBJECT: "estimación preliminar" });
 const CONC = server(7300, QA_ENV);
-const ALL = [OK, FAILTO, FRESH, CONC];
+const ALL = [OK, FAILTO, CONC];
 before(async () => {
   for (const s of ALL) await s.start();
 });
 after(async () => {
   for (const s of ALL) await s.stop();
 });
-const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const COMMERCIAL = /ventas|comercial/i;
 const QA_DEST = new Set(["qa1@prueba.test", "qa.dos@prueba.test", "qa+informes@prueba.test", "qa.gmail@gmail.com", "qa-inbox@example.test", "qa-dev@example.test"]);
 const addrs = (m) => [].concat(m.to || [], m.cc || [], m.bcc || []).map((x) => String(x).trim().toLowerCase());
-async function token(s, email, ip) {
-  const r = await s.post("/api/suppliers/search", { productType: "machinery", userQuery: "sillas plásticas apilables para eventos", quantity: "4", userEmail: email }, ip);
-  assert.equal(r.status, 200);
-  const t = (await r.json()).reportToken;
-  assert.ok(t);
-  await wait(250);
-  return t;
-}
-// a real (tiny) PDF: a refusal must happen before it is even read
-const PDF = Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n").toString("base64");
-const report = (s, body, ip) => s.post("/api/email/report", { totalCostText: "Q64,140.15 (US$8,119.01) sin flete", lang: "es", pdfBase64: PDF, ...body }, ip);
 let ipN = 1;
 const ip = () => `10.7.${Math.floor(ipN / 200)}.${(ipN++ % 200) + 1}`; // the per-IP /api/email limiter is not what is measured
+const grant = async (s, email) => (await verifyEmail(s, email, ip())).reportGrant;
+// a real (tiny) PDF: a refusal must happen before it is even read
+const PDF = Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n").toString("base64");
+const report = (s, body) => s.post("/api/email/report", { totalCostText: "Q64,140.15 (US$8,119.01) sin flete", lang: "es", pdfBase64: PDF, ...body }, ip());
 
-test("servidor · cada rechazo: 403/400 sin direcciones, CERO llamadas a Resend y límites diarios intactos", async () => {
-  const tok = await token(OK, "qa1@prueba.test", "10.7.9.1");
+test("servidor · a cualquier otro destinatario (externo, ventas, alias, inválido): rechazado sin direcciones, CERO llamadas a Resend, límites y autorización intactos", async () => {
+  const g = await grant(OK, "qa1@prueba.test");
   const before = OK.attempts().length;
   for (const [to, why] of REFUSED) {
-    // three times each: more than the 3-per-recipient cap, and 10-per-requester in total
+    if (!to) continue;
     for (let i = 0; i < 3; i++) {
-      const r = await report(OK, { recipientEmail: to, requesterEmail: "qa1@prueba.test", reportToken: tok }, ip());
+      const r = await report(OK, { recipientEmail: to, requesterEmail: "qa1@prueba.test", reportGrant: g });
       const body = await r.text();
-      assert.ok(r.status === 403 || r.status === 400, `${why}: ${to} → ${r.status}`);
-      if (r.status === 403) assert.deepEqual(JSON.parse(body), { error: "qa_recipient_not_allowed" });
+      assert.ok(r.status === 403 || r.status === 400, `${why}: ${JSON.stringify(to)} → ${r.status}`);
       assert.doesNotMatch(body, /@/, "la respuesta no trae direcciones");
     }
   }
   assert.equal(OK.attempts().length, before, "Resend no fue llamado por ningún rechazo");
-  // the caps were not touched: the same requester can still send 3 reports to one QA account,
-  // and the 4th to it is refused by the cap (the cap still works)
-  for (let i = 0; i < 3; i++) assert.equal((await report(OK, { recipientEmail: "qa1@prueba.test", requesterEmail: "qa1@prueba.test", reportToken: tok }, ip())).status, 200, `envío ${i + 1}`);
-  assert.equal((await report(OK, { recipientEmail: "qa1@prueba.test", requesterEmail: "qa1@prueba.test", reportToken: tok }, ip())).status, 429);
+  // neither the grant nor the caps were used: the same grant still sends ONE report to the own mailbox
+  assert.equal((await report(OK, { requesterEmail: "qa1@prueba.test", reportGrant: g })).status, 200);
 });
 
-test("servidor · solicitante QA en mayúsculas, destinatario no textual o demasiado largo → rechazado sin llamar a Resend", async () => {
-  // 02-11i: the requester is identified by exact identity (case and outer spaces only): «QA1@PRUEBA.TEST»
-  // is the QA account and stays isolated; «qa1+x@» is a different (non-QA) account, see qa-identidad-exacta
-  const tok = await token(OK, "QA1@PRUEBA.TEST", "10.7.9.6");
-  const before = OK.attempts().length;
-  const r = await report(OK, { recipientEmail: "cliente@empresa.gt", requesterEmail: "qa1@prueba.test", reportToken: tok }, ip());
-  assert.equal(r.status, 403);
-  for (const bad of [["qa1@prueba.test"], { to: "qa1@prueba.test" }, 12345])
-    assert.equal((await report(OK, { recipientEmail: bad, requesterEmail: "qa1@prueba.test", reportToken: tok }, ip())).status, 400, JSON.stringify(bad));
-  assert.equal(OK.attempts().length, before);
-});
-
-test("servidor · una dirección de más de 254 caracteres se rechaza, no se recorta a otra dirección válida (cliente real)", async () => {
-  // cut at 254 this would become «aaa…@empresa.gtabc», a different, valid-looking address
-  const long = "a".repeat(240) + "@empresa.gt" + "abc" + "@otro.gt";
-  assert.ok(long.length > 254);
-  const tok = await token(OK, "lucia@importadora.gt", "10.7.9.7");
-  const before = OK.attempts().length;
-  const r = await report(OK, { recipientEmail: long, requesterEmail: "lucia@importadora.gt", reportToken: tok }, ip());
-  assert.equal(r.status, 400);
-  assert.equal(OK.attempts().length, before, "nada enviado");
-});
-
-test("servidor · destinatarios autorizados reciben el informe; solo destinos QA; el buzón QA no se copia a sí mismo", async () => {
-  const tok = await token(FRESH, "qa.dos@prueba.test", "10.7.9.2");
-  for (const [to] of ALLOWED) {
-    const n = FRESH.attempts().length;
-    const r = await report(FRESH, { recipientEmail: to, requesterEmail: "qa.dos@prueba.test", reportToken: tok }, ip());
-    assert.equal(r.status, 200, to);
-    const m = FRESH.attempts().slice(n);
-    assert.equal(m.length, 1, to);
-    assert.equal(String(m[0].to).trim().toLowerCase(), to.trim().toLowerCase());
+test("servidor · el informe al propio buzón QA: solo destinos QA; el buzón QA no se copia a sí mismo", async () => {
+  for (const email of ["qa.dos@prueba.test", "QA+Informes@Prueba.Test", "q.a.gmail+informe@googlemail.com"]) {
+    const g = await grant(OK, email);
+    const n = OK.attempts().length;
+    const r = await report(OK, { requesterEmail: email, reportGrant: g });
+    assert.equal(r.status, 200, email);
+    const m = OK.attempts().slice(n);
+    assert.equal(m.length, 1);
     for (const a of addrs(m[0])) {
-      assert.doesNotMatch(a, COMMERCIAL, `${to}: nunca ventas`);
-      assert.ok(QA_DEST.has(a) || a === to.trim().toLowerCase(), `${to}: solo destinos QA (${a})`);
+      assert.doesNotMatch(a, COMMERCIAL, `${email}: nunca ventas`);
+      assert.ok(QA_DEST.has(a) || a === email.trim().toLowerCase(), `${email}: solo destinos QA (${a})`);
     }
-    if (/qa-inbox@/.test(to)) assert.ok(!(m[0].bcc || []).some((x) => /qa-inbox@/i.test(x)), "el buzón QA no se copia a sí mismo");
-    else assert.ok((m[0].bcc || []).includes("qa-inbox@example.test"), "copia al buzón QA");
+    assert.ok((m[0].bcc || []).includes("qa-inbox@example.test"), "copia al buzón QA");
   }
 });
 
 test("servidor · Resend rechaza un informe QA: el reenvío va solo a destinos QA (ni ventas ni el externo)", async () => {
-  const tok = await token(FAILTO, "qa1@prueba.test", "10.7.9.3");
+  const g = await grant(FAILTO, "qa.dos@prueba.test");
   const n = FAILTO.attempts().length;
-  const r = await report(FAILTO, { recipientEmail: "qa.dos@prueba.test", requesterEmail: "qa1@prueba.test", reportToken: tok }, ip());
+  const r = await report(FAILTO, { requesterEmail: "qa.dos@prueba.test", reportGrant: g });
   assert.deepEqual(await r.json(), { success: true, delivered: false, forwarded: true });
   const tried = FAILTO.attempts().slice(n);
   assert.equal(tried.length, 2);
@@ -188,40 +152,38 @@ test("servidor · Resend rechaza un informe QA: el reenvío va solo a destinos Q
   for (const m of tried) for (const a of addrs(m)) assert.ok(QA_DEST.has(a) && !COMMERCIAL.test(a), a);
 });
 
-test("servidor · cliente real válido: flujo comercial sin cambios (BCC a ventas y copia comercial; reenvío a ventas)", async () => {
-  const tok = await token(OK, "lucia@importadora.gt", "10.7.9.4");
+test("servidor · cliente real válido: flujo comercial (BCC a ventas y copia comercial; si Resend rechaza, reenvío a ventas)", async () => {
+  const g = await grant(OK, "Gerencia@Importadora.gt");
   const n = OK.attempts().length;
-  const r = await report(OK, { recipientEmail: "Gerencia@Importadora.gt", requesterEmail: "lucia@importadora.gt", reportToken: tok }, ip());
+  const r = await report(OK, { requesterEmail: "gerencia@importadora.gt", reportGrant: g });
   assert.deepEqual(await r.json(), { success: true, delivered: true, forwarded: false });
   const m = OK.attempts().slice(n);
   assert.equal(m.length, 1);
   assert.deepEqual(m[0].bcc, ["ventas@example.test", "comercial@example.test"]);
   assert.doesNotMatch(m[0].subject, /PRUEBA/);
-  // a real client's refused recipient is forwarded to sales (unchanged)
-  const tok2 = await token(FAILTO, "rechazada@cliente.gt", "10.7.9.5");
+  const g2 = await grant(FAILTO, "rechazada@cliente.gt");
   const k = FAILTO.attempts().length;
-  const f = await report(FAILTO, { recipientEmail: "rechazada@cliente.gt", requesterEmail: "rechazada@cliente.gt", reportToken: tok2 }, ip());
+  const f = await report(FAILTO, { requesterEmail: "rechazada@cliente.gt", reportGrant: g2 });
   assert.deepEqual(await f.json(), { success: true, delivered: false, forwarded: true });
   assert.deepEqual(FAILTO.attempts().slice(k)[1].to, ["ventas@example.test", "comercial@example.test"]);
 });
 
-test("concurrencia · 6 informes QA válidos y 6 rechazados a la vez: exactamente 3 pasan el tope por destinatario; los rechazos no cuentan", async () => {
+test("concurrencia · 6 informes válidos (cada uno con su autorización) y 6 rechazados a la vez: exactamente 3 pasan el tope; los rechazos no cuentan", async () => {
   const S = CONC;
-  const tok = await token(S, "qa+informes@prueba.test", "10.7.9.8");
+  const grants = [];
+  for (let i = 0; i < 6; i++) grants.push(await grant(S, "qa+informes@prueba.test"));
   const before = S.attempts().length;
   const bodies = [];
   for (let i = 0; i < 6; i++) {
-    bodies.push({ recipientEmail: "qa+otra@prueba.test", requesterEmail: "qa+informes@prueba.test", reportToken: tok });
-    bodies.push({ recipientEmail: "qa+informes@prueba.test", requesterEmail: "qa+informes@prueba.test", reportToken: tok });
+    bodies.push({ recipientEmail: "qa+otra@prueba.test", requesterEmail: "qa+informes@prueba.test", reportGrant: grants[i] });
+    bodies.push({ requesterEmail: "qa+informes@prueba.test", reportGrant: grants[i] });
   }
-  const st = await Promise.all(bodies.map((b) => report(S, b, ip()).then((r) => r.status)));
+  const st = await Promise.all(bodies.map((b) => report(S, b).then((r) => r.status)));
   const refused = st.filter((_, i) => i % 2 === 0), sent = st.filter((_, i) => i % 2 === 1);
   assert.deepEqual(refused, [403, 403, 403, 403, 403, 403]);
   assert.equal(sent.filter((x) => x === 200).length, 3, JSON.stringify(sent));
   assert.equal(sent.filter((x) => x === 429).length, 3);
-  const tried = S.attempts().slice(before);
-  assert.equal(tried.length, 3, "solo los 3 aceptados llegaron a Resend");
-  for (const m of tried) assert.equal(m.to, "qa+informes@prueba.test");
+  assert.equal(S.attempts().length - before, 3, "solo los 3 aceptados llegaron a Resend");
 });
 
 test("privacidad · ningún registro del servidor trae direcciones", () => {

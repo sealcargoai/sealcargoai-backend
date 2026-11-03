@@ -21,6 +21,8 @@ export function server(portBase, env) {
           LEADS_CC: "",
           QA_NOTIFY_EMAILS: "qa-dev@example.test",
           QA_EMAILS: "qa1@prueba.test",
+          VERIFY_MAX_PER_ADDRESS_HOUR: "100",
+          VERIFY_MAX_PER_IP_HOUR: "1000",
           QA_LEADS_EMAIL: "",
           ADMIN_EMAIL: "",
           ADMIN2_EMAIL: "",

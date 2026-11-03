@@ -11,6 +11,7 @@ import leadsRouter, { learnBase } from "./routes/leads.js";
 import { recipientConfig, emailDryRun, qaRouting } from "./services/email.js";
 import { corsOrigin, rateLimit } from "./middleware/security.js";
 import { isQa, flushQuota } from "./services/quotaStore.js";
+import { sessionVerifies } from "./services/verifyStore.js";
 import { flushLeads } from "./services/leadStore.js";
 import { flushFunnel } from "./services/funnelStore.js";
 
@@ -25,7 +26,7 @@ app.disable("x-powered-by");
 app.use(cors({
   origin: corsOrigin,
   methods: ["GET", "POST"],
-  allowedHeaders: ["Content-Type"],
+  allowedHeaders: ["Content-Type", "X-Verified-Session"],
 }));
 
 // 5 MB only where the PDF report (base64) travels; everything else stays small
@@ -37,10 +38,14 @@ app.use(express.json({ limit: "200kb" }));
 const searchLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
   max: 20,
-  skip: (req) => typeof req.body?.userEmail === "string" && isQa(req.body.userEmail),
+  // 02-11k: only a verified QA session (not a typed QA address) skips the limit
+  skip: (req) => typeof req.body?.userEmail === "string" && isQa(req.body.userEmail) && sessionVerifies(req.body?.verifiedSession, req.body.userEmail),
 });
 const aiLimiter     = rateLimit({ windowMs: 10 * 60 * 1000, max: 40 });
 const emailLimiter  = rateLimit({ windowMs: 60 * 60 * 1000, max: 10 });
+// 02-11k (review): the code steps have their own limit, so a report (code + confirm + send) does not use up
+// the budget of case and report sends of a shared office or mobile IP; per-address caps live in verifyStore
+const verifyLimiter = rateLimit({ windowMs: 60 * 60 * 1000, max: 30 });
 const eventLimiter  = rateLimit({ windowMs: 60 * 60 * 1000, max: 120 });
 const followLimiter = rateLimit({ windowMs: 10 * 60 * 1000, max: 60 });
 
@@ -49,7 +54,8 @@ app.use(learnBase);
 app.use("/api/suppliers/search", searchLimiter);
 app.use("/api/suppliers", suppliersRouter);
 app.use("/api/ai", aiLimiter, aiRouter);
-app.use("/api/email", emailLimiter, emailRoutes);
+app.use("/api/email/verify", verifyLimiter);
+app.use("/api/email", (req, res, next) => (req.path.startsWith("/verify/") ? next() : emailLimiter(req, res, next)), emailRoutes);
 app.use("/api/rates", ratesRouter);
 app.use("/api/events", eventLimiter);
 app.use("/api/leads", followLimiter);
@@ -70,7 +76,7 @@ app.get("/", (_req, res) => {
 });
 
 // the version actually running (the commit Railway built), to tell which code a test hit
-export const BACKEND_VERSION = "2026.11.02-j";
+export const BACKEND_VERSION = "2026.11.02-k";
 app.get("/health", (_req, res) => {
   res.json({
     status:          "ok",

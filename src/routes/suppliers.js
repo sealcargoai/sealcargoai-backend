@@ -5,6 +5,7 @@ import { scoreSuppliers, categorizeSuppliers } from "../services/scoring.js";
 import { refineKeyword, shortenKeyword } from "./ai.js";
 import { clientIp, clean, malformedFields, unsupportedEmail, QTY_MIN, QTY_MAX, BUDGET_MAX } from "../middleware/security.js";
 import { sendSearchLead, scrubEmails } from "../services/email.js";
+import { sessionVerifies } from "../services/verifyStore.js";
 
 // Send the search to SEAL sales without delaying the user's response
 function notifySearch(details) {
@@ -21,8 +22,6 @@ import {
   limitReason,
   remainingSearches,
   reserveSearch,
-  hasSearched,
-  reportToken,
 } from "../services/quotaStore.js";
 
 // A description needs at least 10 characters and 2 real words (one of 4+ letters)
@@ -50,11 +49,14 @@ setInterval(() => {
 router.get("/quota", (req, res) => {
   const email = normalizeEmail(typeof req.query.email === "string" ? req.query.email : "");
   const ip = clientIp(req);
+  // 02-11k (review): a QA account's verified session (header, never in the URL) counts here too, so the
+  // form does not stop it before the search that accepts the same session
+  const qaVerified = isQa(email) && sessionVerifies(req.get("x-verified-session"), email);
   res.set("Cache-Control", "no-store");
   res.json({
     limit: SEARCH_LIMIT,
-    remaining: remainingSearches(email, ip),
-    reason: limitReason(email, ip),
+    remaining: remainingSearches(email, ip, qaVerified),
+    reason: limitReason(email, ip, qaVerified),
   });
 });
 
@@ -66,7 +68,7 @@ router.post("/search", async (req, res) => {
     const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
     // an object or an array where text goes is a malformed request: rejected before anything is
     // counted or searched (it used to be joined or dropped silently)
-    const malformed = malformedFields(body, ["userQuery", "productType", "material", "destination", "userEmail", "quantity", "budget", "volumeCbm", "weightKg"]);
+    const malformed = malformedFields(body, ["userQuery", "productType", "material", "destination", "userEmail", "quantity", "budget", "volumeCbm", "weightKg", "verifiedSession"]);
     if (malformed.length) return res.status(400).json({ error: "invalid_fields", fields: malformed.slice(0, 10) });
     for (const k of ["userQuery", "productType", "material", "destination"]) {
       const v = body[k];
@@ -88,6 +90,8 @@ router.post("/search", async (req, res) => {
     }
     const userEmail = normalizeEmail(req.body.userEmail);
     const ip = clientIp(req);
+    // 02-11k: QA privileges (no search limits) only for a verified session of that same QA address
+    const qaVerified = isQa(userEmail) && sessionVerifies(req.body.verifiedSession, userEmail);
 
     if (!productType) {
       return res.status(400).json({ error: "productType is required" });
@@ -104,7 +108,7 @@ router.post("/search", async (req, res) => {
         filteredOut: [],
         totalAnalyzed: 0,
         qualifiedCount: 0,
-        remainingSearches: remainingSearches(userEmail, ip),
+        remainingSearches: remainingSearches(userEmail, ip, qaVerified),
         message: "Description too vague to search.",
       });
     }
@@ -127,13 +131,13 @@ router.post("/search", async (req, res) => {
     // Validation passed: only now is a search slot reserved (an invalid request never spends a free search)
     // ── SEARCH LIMIT CHECK: the slot is reserved now (parallel requests can't
     // pass the limit) and given back below if the search shows nothing ──
-    ticket = reserveSearch(userEmail, ip);
+    ticket = reserveSearch(userEmail, ip, qaVerified);
     if (!ticket) {
       return res.status(429).json({
         error: "Search limit reached",
         message: "Has alcanzado el límite de búsquedas gratuitas.",
         limitReached: true,
-        reason: limitReason(userEmail, ip),
+        reason: limitReason(userEmail, ip, qaVerified),
         remainingSearches: 0,
         limit: SEARCH_LIMIT,
       });
@@ -190,8 +194,7 @@ router.post("/search", async (req, res) => {
         ...cached,
         fromCache: true,
         searchKeyword: keyword,
-        remainingSearches: remainingSearches(userEmail, ip),
-        ...(userEmail && hasSearched(userEmail) ? { reportToken: reportToken(userEmail) } : {}),
+        remainingSearches: remainingSearches(userEmail, ip, qaVerified),
       });
     }
 
@@ -246,7 +249,7 @@ router.post("/search", async (req, res) => {
         message: noRelevantMatches
           ? "Results did not match the described product."
           : "No live results from Alibaba (blocked or no matches).",
-        remainingSearches: remainingSearches(userEmail, ip),
+        remainingSearches: remainingSearches(userEmail, ip, qaVerified),
       });
     }
 
@@ -276,8 +279,8 @@ router.post("/search", async (req, res) => {
       ...result,
       fromCache: false,
       searchKeyword: usedKeyword,   // ← return so frontend knows what was searched
-      remainingSearches: remainingSearches(userEmail, ip),
-      ...(userEmail && hasSearched(userEmail) ? { reportToken: reportToken(userEmail) } : {}),
+      remainingSearches: remainingSearches(userEmail, ip, qaVerified),
+
     });
 
   } catch (error) {

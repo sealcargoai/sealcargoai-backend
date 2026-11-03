@@ -47,6 +47,8 @@ const COMMERCIAL = emailList(LEADS_EMAIL, process.env.LEADS_CC);
 // «ventas+qa@…» is delivered to ventas@: it is a commercial address, never a QA one.
 const COMMERCIAL_KEYS = new Set(COMMERCIAL.map((x) => emailKey(x)).filter(Boolean));
 const isCommercial = (x) => COMMERCIAL_KEYS.has(emailKey(x));
+/** 02-11k: an address that may reach sales (verification codes are never sent there). */
+export const isCommercialAddress = (x) => isCommercial(x);
 const DEV_COPIES = emailList(process.env.ADMIN_EMAIL, process.env.ADMIN2_EMAIL, process.env.QA_NOTIFY_EMAILS).filter((x) => !isCommercial(x));
 const QA_INBOX_RAW = String(process.env.QA_LEADS_EMAIL || "").trim();
 const QA_INBOX = emailList(QA_INBOX_RAW);
@@ -413,9 +415,10 @@ export async function sendReportToUser({
   const resend = getResendClient();
   const en = lang === "en";
   const attachments = pdfBuffer
-    ? [{ filename: `SEAL_${en ? "Report" : "Informe"}_${Date.now()}.pdf`, content: pdfBuffer }]
+    // 02-11k: the PDF is made in the client's browser: its name says it is a preliminary estimate, not a SEAL document
+    ? [{ filename: `SmartTrade_${en ? "preliminary_estimate" : "estimacion_preliminar"}_${Date.now()}.pdf`, content: pdfBuffer }]
     : [];
-  const other = requesterEmail && requesterEmail.toLowerCase() !== String(recipientEmail).toLowerCase();
+  void recipientName; // 02-11k: reports go only to the requester's own verified mailbox: no third-party greeting
   // 02-11e: the same decision as the route, again here, before Resend is called: a QA report goes
   // only to a QA recipient, with QA copies; without QA routing or to any other address nothing is sent
   const routing = reportRouting(recipientEmail, requesterEmail);
@@ -427,20 +430,20 @@ export async function sendReportToUser({
   // the client's language, as in the PDF they chose
   const content = en
     ? `
-    <h2>📄 Your import report</h2>
-    <p>Hello${recipientName ? ` ${e(recipientName)}` : ""},</p>
-    ${supplierName ? `<p>Supplier: ${e(supplierName)}</p>` : ""}
-    <p>${partial ? "Preliminary estimated cost, without freight" : "Preliminary estimated cost"}: ${total}</p>
-    ${other ? `<p>Sent at the request of: ${e(requesterEmail)}</p>` : ""}
-    <p style="color:#64748b;font-size:12px">This is a preliminary estimate based on information published by the platform; it is not a quote or a verification of the supplier.</p>
+    <h2>📄 Your preliminary estimate</h2>
+    <p>Hello,</p>
+    <p>You asked SmartTrade AI to email you the estimate you prepared. <b>The attached PDF was generated in your browser with the data you entered; SEAL did not review or validate it.</b> It is preliminary guidance: it is not a quote, a supplier verification or a confirmed tariff classification.</p>
+    ${supplierName ? `<p>Supplier (as entered in the tool): ${e(supplierName)}</p>` : ""}
+    <p>${partial ? "Preliminary estimated cost, without freight (tool's figure)" : "Preliminary estimated cost (tool's figure)"}: ${total}</p>
+    <p style="color:#64748b;font-size:12px">If you want SEAL to review your case, reply to SEAL on WhatsApp +502 5996 4664.</p>
   `
     : `
-    <h2>📄 Su informe de importación</h2>
-    <p>Hola${recipientName ? ` ${e(recipientName)}` : ""}:</p>
-    ${supplierName ? `<p>Proveedor: ${e(supplierName)}</p>` : ""}
-    <p>${partial ? "Costo estimado preliminar, sin flete" : "Costo estimado preliminar"}: ${total}</p>
-    ${other ? `<p>Enviado a solicitud de: ${e(requesterEmail)}</p>` : ""}
-    <p style="color:#64748b;font-size:12px">Es una estimación preliminar con información publicada por la plataforma; no es una cotización ni una verificación del proveedor.</p>
+    <h2>📄 Su estimación preliminar</h2>
+    <p>Hola:</p>
+    <p>Usted pidió a SmartTrade AI enviarle por correo la estimación que preparó. <b>El PDF adjunto se generó en su navegador con los datos que usted ingresó; SEAL no lo revisó ni lo valida.</b> Es una orientación preliminar: no es una cotización, ni una verificación del proveedor, ni una clasificación arancelaria confirmada.</p>
+    ${supplierName ? `<p>Proveedor (según los datos ingresados en la herramienta): ${e(supplierName)}</p>` : ""}
+    <p>${partial ? "Costo estimado preliminar, sin flete (cifra de la herramienta)" : "Costo estimado preliminar (cifra de la herramienta)"}: ${total}</p>
+    <p style="color:#64748b;font-size:12px">Si desea que SEAL revise su caso, escriba al WhatsApp de SEAL +502 5996 4664.</p>
   `;
 
   const { data, error } = await resend.emails.send({
@@ -452,8 +455,9 @@ export async function sendReportToUser({
       const bcc = copies.filter((x) => mailboxAddress(x) !== mailboxAddress(recipientEmail));
       return bcc.length ? { bcc } : {};
     })(),
-    subject: `${en ? "Your SEAL report" : "Su informe SEAL"}${supplierName ? ` - ${String(supplierName).replace(/[\r\n]/g, " ")}` : ""}`,
-    html: emailWrapper(en ? "Import analysis report" : "Informe de análisis de importación", content),
+    // 02-11k: no free text in the subject
+    subject: en ? "Your preliminary estimate (SmartTrade AI)" : "Su estimación preliminar (SmartTrade AI)",
+    html: emailWrapper(en ? "Preliminary estimate" : "Estimación preliminar", content),
     attachments,
   });
 
@@ -479,6 +483,29 @@ export async function sendReportToUser({
   return { delivered: false, forwarded: true };
 }
 
+/* ─────────────────────────────────────────────
+   02-11k: verification code (proof of control of an address)
+   Sent only to the address itself; no case data, no links, no free text.
+───────────────────────────────────────────── */
+export async function sendVerificationCode(email, code, lang = "es") {
+  const resend = getResendClient();
+  const en = lang === "en";
+  const c = String(code).replace(/\D/g, "").slice(0, 6);
+  const { data, error } = await resend.emails.send({
+    from: FROM_EMAIL,
+    to: [email],
+    subject: en ? "Your SmartTrade AI verification code" : "Su código de verificación de SmartTrade AI",
+    html: emailWrapper(
+      en ? "Verification code" : "Código de verificación",
+      en
+        ? `<p>Your code is:</p><p style="font-size:28px;font-weight:bold;letter-spacing:6px">${c}</p><p style="color:#64748b;font-size:12px">It expires in 15 minutes. If you did not ask for it, ignore this message: nothing will be sent without the code.</p>`
+        : `<p>Su código es:</p><p style="font-size:28px;font-weight:bold;letter-spacing:6px">${c}</p><p style="color:#64748b;font-size:12px">Vence en 15 minutos. Si usted no lo pidió, ignore este mensaje: sin el código no se envía nada.</p>`,
+    ),
+  });
+  if (error) throw new Error(error.message);
+  return data;
+}
+
 /* ✅ Optional default export (not required but safe) */
 export default {
   sendLeadNotification,
@@ -487,4 +514,5 @@ export default {
   sendCaseToSeal,
   sendFollowUpReminder,
   sendReportToUser,
+  sendVerificationCode,
 };
