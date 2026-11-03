@@ -8,6 +8,14 @@ import path from "node:path";
 import crypto from "node:crypto";
 
 export const EVENTS = ["visita", "consulta_iniciada", "resultados", "contacto_abierto", "whatsapp_clic", "solicitud_enviada"];
+// 02-11k: a conversion is counted by the SERVER when it registers a new case (/api/email/quote), never from
+// what a browser reports; the browser can only report top-of-funnel events
+export const CLIENT_EVENTS = EVENTS.filter((e) => e !== "solicitud_enviada");
+// per-IP daily cap of counted browser events and a ceiling for the day's dedupe set (memory and file size)
+const IP_DAILY = 40;
+const SEEN_MAX = 200000;
+let ipDay = "";
+let ipCounts = new Map();
 const DATA_DIR = process.env.DATA_DIR || "";
 const FILE = DATA_DIR ? path.join(DATA_DIR, "funnel.json") : "";
 const KEEP_DAYS = 400;
@@ -19,8 +27,8 @@ let seen = new Set(); // hashes of vid|event for seenDay
 const dayOf = (now) => new Date(now).toISOString().slice(0, 10);
 
 /** Counts one event; false when this browser already counted it today or it's unknown. */
-export function recordEvent(event, vid, now = Date.now(), qa = false) {
-  if (!EVENTS.includes(event)) return false;
+export function recordEvent(event, vid, now = Date.now(), qa = false, { server = false, ip = "" } = {}) {
+  if (!(server ? EVENTS : CLIENT_EVENTS).includes(event)) return false;
   const v = typeof vid === "string" && /^[a-z0-9-]{8,64}$/i.test(vid) ? vid : "";
   if (!v) return false;
   const day = dayOf(now);
@@ -30,6 +38,15 @@ export function recordEvent(event, vid, now = Date.now(), qa = false) {
   }
   const h = crypto.createHash("sha256").update(`${v}|${event}|${qa ? 1 : 0}`).digest("base64url").slice(0, 16);
   if (seen.has(h)) return false;
+  if (!server) {
+    if (day !== ipDay) {
+      ipDay = day;
+      ipCounts = new Map();
+    }
+    const n = ipCounts.get(ip) || 0;
+    if (n >= IP_DAILY || seen.size >= SEEN_MAX) return false;
+    ipCounts.set(ip, n + 1);
+  }
   seen.add(h);
   // QA sessions go to their own counter, never to the commercial funnel
   const key = qa ? `qa:${event}` : event;

@@ -56,9 +56,20 @@ const isOpen = (l) => l.status !== "cliente" && l.status !== "descartado";
  * Registers a request. Returns { lead, duplicate }: duplicate = it was already
  * an open case (same person, product and supplier), which is updated instead.
  */
-export function registerLead(input, now = Date.now()) {
+/** 02-11k: the open case this request would repeat (same person, product and supplier), or null. */
+export function findDuplicate(input, now = Date.now()) {
+  const key = dedupeKey({ email: input.contact.email, product: input.case.product || input.case.description, supplierUrl: input.case.supplierUrl, supplierName: input.case.supplierName });
+  return leads.find((l) => l.key === key && isOpen(l) && now - l.createdAt < OPEN_WINDOW) || null;
+}
+/**
+ * 02-11k: `authorized` = the request proved control of the existing case (its signed case token). Without
+ * it a repeat changes NOTHING (no field, no counter, no history, no email): anyone who knows a client's
+ * email, product and supplier could otherwise rewrite the quantity, budget, message or contact.
+ */
+export function registerLead(input, now = Date.now(), { authorized = false } = {}) {
   const key = dedupeKey({ email: input.contact.email, product: input.case.product || input.case.description, supplierUrl: input.case.supplierUrl, supplierName: input.case.supplierName });
   const existing = leads.find((l) => l.key === key && isOpen(l) && now - l.createdAt < OPEN_WINDOW);
+  if (existing && !authorized) return { lead: existing, duplicate: true, changes: [], authorized: false };
   if (existing) {
     existing.repeats = (existing.repeats || 0) + 1;
     // 02-11c: whether it is a test is decided again on every request (QA allow-list now): a case
@@ -73,20 +84,15 @@ export function registerLead(input, now = Date.now()) {
       if (JSON.stringify(existing.case[k]) !== JSON.stringify(v)) changes.push(k);
       existing.case[k] = v;
     }
-    // 02-11j: the contact of an existing case is never replaced by a later request (anyone who knows
-    // the client's email and product could otherwise swap the phone/company SEAL calls): empty fields
-    // are completed; different values are kept aside, marked, for SEAL to confirm with the client
-    // (review: also a field that was EMPTY is not filled — the first sender may simply not have given a
-    // phone, and a repeat from anyone would then set the phone SEAL calls)
-    const proposed = {};
+    // 02-11k: the owner (signed case token) may update the contact too
     for (const [k, v] of Object.entries(input.contact)) {
       if (!v || k === "email") continue;
-      if (existing.contact[k] !== v) proposed[k] = v;
+      if (existing.contact[k] !== v) changes.push(k);
+      existing.contact[k] = v;
     }
-    if (Object.keys(proposed).length) changes.push("contacto_distinto");
-    existing.history.push({ at: now, action: changes.length ? "actualizada" : "repetida", source: input.source, requestType: input.requestType, changes, ...(Object.keys(proposed).length ? { proposedContact: proposed } : {}) });
+    existing.history.push({ at: now, action: changes.length ? "actualizada" : "repetida", source: input.source, requestType: input.requestType, changes, by: "titular (enlace del caso)" });
     scheduleSave();
-    return { lead: existing, duplicate: true, changes, contactPending: Object.keys(proposed).length > 0 };
+    return { lead: existing, duplicate: true, changes, authorized: true };
   }
   const lead = {
     id: newId(now),
