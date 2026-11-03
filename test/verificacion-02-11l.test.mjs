@@ -107,12 +107,12 @@ test("6 · fuerza bruta: 5 fallos por IP y dirección por hora bloquean ESA IP; 
   const E = "objetivo@cliente-ficticio.test";
   const t = Date.parse("2026-11-03T12:00:00Z");
   const c = s.start(E, "10.50.0.1", t);
-  assert.match(c.code, /^[A-HJ-NP-Z2-9]{8}$/, "8 símbolos sin I, O, 0 ni 1");
+  assert.match(c.code, /^[A-HJ-NP-Z2-9]{10}$/, "10 símbolos sin I, O, 0 ni 1");
   for (let i = 0; i < 5; i++) assert.equal(s.confirm(E, "AAAAAAAA", "10.51.0.1", t + i), null);
   assert.equal(s.confirm(E, c.code, "10.51.0.1", t + 10), null, "esa IP: bloqueada una hora aun con el código correcto");
   // 100 wrong codes from 20 other IPs do not lock the address: the owner still verifies
   for (let i = 0; i < 100; i++) s.confirm(E, "AAAAAAAA", `10.52.0.${i % 20}`, t + 20 + i);
-  assert.ok(s.confirm(E, c.code.toLowerCase().replace(/(.{4})/, "$1-"), "10.50.0.1", t + 200), "el titular verifica (minúsculas y guion aceptados)");
+  assert.ok(s.confirm(E, c.code.toLowerCase().replace(/(.{5})/, "$1-"), "10.50.0.1", t + 200), "el titular verifica (minúsculas y guion aceptados)");
 });
 
 test("7 · fallo del almacén: lectura o escritura imposible → error controlado, nada concedido", () => {
@@ -158,7 +158,7 @@ const allMails = () => [...A.attempts(), ...B.attempts()];
 test("8 · dos instancias: código pedido en A, confirmado en B; informe en A; la autorización enviada a A y B a la vez sirve una vez", async () => {
   await A.post("/api/email/verify/start", { email: "multi@cliente-ficticio.test" }, "10.70.0.1");
   const m = A.mails().filter((x) => /código/i.test(x.subject)).at(-1);
-  const code = m.html.match(/letter-spacing:6px[^"]*">([A-Z0-9]{8})</)[1];
+  const code = m.html.match(/letter-spacing:6px[^"]*">([A-Z0-9]{5}-[A-Z0-9]{5})</)[1];
   const r = await B.post("/api/email/verify/confirm", { email: "multi@cliente-ficticio.test", code }, "10.70.0.1");
   assert.equal(r.status, 200, "B conoce el código enviado por A");
   const v = await r.json();

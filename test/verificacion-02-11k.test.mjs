@@ -31,7 +31,7 @@ const PDF = Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n").toS
 const report = (body) => S.post("/api/email/report", { totalCostText: "Q1,000.00", lang: "es", pdfBase64: PDF, ...body }, ip());
 const codeOf = (srv, email) => {
   const m = [...srv.mails()].reverse().find((x) => [].concat(x.to).includes(email) && /código/i.test(x.subject));
-  return m && m.html.match(/letter-spacing:6px[^"]*">([A-Z0-9]{8})</)[1];
+  return m && m.html.match(/letter-spacing:6px[^"]*">([A-Z0-9]{5}-[A-Z0-9]{5})</)[1];
 };
 
 test("1 · una búsqueda con el correo de otra persona no da ninguna autorización de informe", async () => {
