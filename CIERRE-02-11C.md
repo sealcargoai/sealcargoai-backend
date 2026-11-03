@@ -62,3 +62,19 @@ mutación fallan pruebas.
 escribir ese alias exacto en `QA_EMAILS` en Railway.
 
 Comportamiento que se mantiene a propósito: un cliente real que envía a un alias de una cuenta QA (`qa1+x@`) cuenta como operación QA y se rechaza. Es la opción segura, porque nunca termina en ventas.
+
+## 02-11g — revisión final de autorización QA
+
+Versión `2026.11.02-g`.
+
+| Defecto | Causa raíz | Corrección | Prueba |
+|---|---|---|---|
+| `Ka@prueba.test` (con el signo Kelvin) se autorizaba como la cuenta QA `ka@prueba.test`, pero a Resend se le entregaba la dirección original, que es otro buzón | `toLowerCase()` convierte algunas letras no ASCII en ASCII (Kelvin → `k`); la comparación se hacía después de pasar a minúsculas | `mailboxAddress()` rechaza cualquier carácter no ASCII imprimible en la entrada **antes** de pasar a minúsculas: una dirección así nunca se autoriza como destinatario QA | `qa-revision-final.test.mjs` A, «signo Kelvin no llega a Resend» |
+| Un alias `+` escrito en `QA_EMAILS` (`juan+qa@empresa`) convertía en cuenta QA a la dirección base (`juan@empresa`) y a todos sus alias. Si `juan@empresa` era un cliente real, su consulta, búsqueda, caso e informe iban al buzón QA en vez de a ventas, y además no tenía límite de búsquedas | `isQa()` comparaba con la clave amplia `emailKey`, que quita el `+` de la entrada configurada | Clasificación por entrada. Una entrada sin `+` cubre sus variantes `+` (la misma persona sigue aislada). Una entrada con `+` fuera de Gmail cubre solo ese alias. En Gmail, alias y base son el mismo buzón (regla de Google) | B, «cliente real… flujo comercial», «límite normal de búsquedas», «alias QA expreso aislado» |
+
+Comprobación de mutaciones (cambiando solo `quotaStore.js`, con las pruebas tal cual):
+- con el código 02-11f, 5 de 8 pruebas fallan;
+- sin el chequeo ASCII, fallan 2 (A y Kelvin);
+- con la clasificación amplia de alias, fallan 3 (B, flujo comercial y límite).
+
+Tamaño del build: el aviso de más de 500 kB viene de `reportExports` (ExcelJS, 1,055 KB) y `costPdf` (jsPDF, 418 KB). Los dos se cargan solo al exportar. El paquete inicial (`index`, 591 KB, 196 KB gzip) incluye el chat porque el formulario de calificación lo usa. Separarlo no mejora la ruta principal y amplía el alcance, así que no se cambió.
