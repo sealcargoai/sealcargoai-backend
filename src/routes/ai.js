@@ -33,7 +33,7 @@ export async function refineKeyword({ userQuery, productType, material }) {
   const fallbackClean = productWords(withoutExclusions) || productWords(rawInput);
 
   if (!apiKey) {
-    console.log("⚠️ No Groq key — using fallback keyword:", fallbackClean);
+    console.log(`⚠️ No Groq key — using fallback keyword (${String(fallbackClean || "").split(/\s+/).filter(Boolean).length} words)`);
     return fallbackClean;
   }
 
@@ -103,7 +103,7 @@ Examples: "lápices escolares de madera para estudiantes, paquete de 500 unidade
     }
   }
 
-  console.log("⚠️ All Groq models failed — using fallback keyword:", fallbackClean);
+  console.log(`⚠️ All Groq models failed — using fallback keyword (${String(fallbackClean || "").split(/\s+/).filter(Boolean).length} words)`);
   return fallbackClean;
 }
 

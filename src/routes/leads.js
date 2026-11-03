@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 // Follow-up of the registered cases and the funnel.
 // - /api/events: anonymous funnel events from the site (visits, queries, results…)
 // - /api/leads/act/:id: the page a SEAL person opens from the case email to record
@@ -18,9 +19,22 @@ const DEFAULT_PUBLIC_URL = "https://sealcargoai-backend-production.up.railway.ap
 export function baseUrl(req) {
   if (process.env.PUBLIC_API_URL) return process.env.PUBLIC_API_URL;
   const host = String(req.get("host") || "").toLowerCase();
-  if (/^[a-z0-9-]+\.up\.railway\.app$/.test(host)) return `https://${host}`;
+  // 02-11j: only SEAL's own Railway host (any «*.up.railway.app» is any Railway customer's app)
+  if (host === new URL(DEFAULT_PUBLIC_URL).host) return DEFAULT_PUBLIC_URL;
+  // (review) a non-production Railway environment (staging, PR) links to itself: Railway sets its domain
+  const own = String(process.env.RAILWAY_PUBLIC_DOMAIN || "").toLowerCase();
+  if (own && host === own) return `https://${own}`;
   if (/^(?:localhost|127\.0\.0\.1)(?::\d{2,5})?$/.test(host)) return `${req.protocol}://${host}`;
   return DEFAULT_PUBLIC_URL;
+}
+// 02-11j: the admin token is compared in constant time (it used to be «===»)
+// (review: compared as SHA-256 digests — same length always, so neither a length difference nor a
+// non-ASCII header can throw, answer 500 or reveal the token's length)
+function adminTokenOk(given) {
+  const want = String(process.env.ADMIN_TOKEN || "");
+  if (!want) return false;
+  const h = (x) => crypto.createHash("sha256").update(String(x || ""), "utf8").digest();
+  return crypto.timingSafeEqual(h(given), h(want));
 }
 export const leadToken = (id) => sign(`lead:${id}`);
 export const funnelToken = () => sign("funnel");
@@ -180,7 +194,7 @@ router.get("/leads/case/:id", async (req, res) => {
       <div class="card"><b>Lo que recibió SEAL</b><table>
         ${row("Producto", c.product)}${row("Cantidad", c.quantity)}${row("Proveedor", c.supplierName)}
         ${c.priceSource === "usuario" ? row("Precio indicado por el usuario", c.price) + row("Precio publicado", c.publishedPrice) : c.publishedPrice && c.publishedPrice !== c.price ? row("Precio usado en la estimación", c.price) + row("Precio publicado", c.publishedPrice) : row("Precio publicado", c.price)}
-        ${row("Costo total estimado", c.totalCostText)}${row("Presupuesto de compra", c.budget)}${row("Tu mensaje", c.message)}
+        ${row(/sin flete|without freight/i.test(String(c.totalCostText || "")) ? "Costo estimado preliminar (sin flete)" : "Costo estimado preliminar", c.totalCostText)}${row("Presupuesto de compra", c.budget)}${row("Tu mensaje", c.message)}
         ${list("Supuestos de la estimación", c.assumptions)}${list("Advertencias", c.warnings)}${list("Lo que escribiste en el chat", c.chat)}${list("Datos anteriores (ya no vigentes)", c.earlier)}
       </table></div>
       <p class="muted">${c.supplierName || c.price || c.totalCostText ? "Es una estimación preliminar con información publicada por la plataforma; no es una cotización ni una verificación del proveedor. " : ""}Para algo urgente escribe al WhatsApp de SEAL +502 5996 4664 con tu número de caso.</p>`,
@@ -189,7 +203,7 @@ router.get("/leads/case/:id", async (req, res) => {
 });
 
 router.get("/leads/funnel", (req, res) => {
-  const admin = process.env.ADMIN_TOKEN && req.get("x-admin-token") === process.env.ADMIN_TOKEN;
+  const admin = adminTokenOk(req.get("x-admin-token"));
   if (!admin && !verifySigned("funnel", clean(req.query.t, 64))) return res.status(404).send(page("No encontrado", "<h1>Enlace no válido</h1>"));
   const days = Math.min(400, Math.max(1, parseInt(req.query.days) || 30));
   const since = Date.now() - days * 86400000;

@@ -142,11 +142,12 @@ router.post("/search", async (req, res) => {
     console.log(`\n🔍 Search request`);
     // the client's own words are not logged (they can carry names, phones or emails)
     console.log(`   User Query:  ${String(userQuery || "").length} chars`);
-    console.log(`   ProductType: ${productType}`);
-    console.log(`   Material:    ${material || "(none)"}`);
+    // 02-11j: fields typed by the client are logged as a category or a length only (no text, no line breaks)
+    console.log(`   ProductType: ${/^[a-z_-]{1,30}$/i.test(String(productType)) ? productType : `${String(productType).length} chars`}`);
+    console.log(`   Material:    ${material ? `${String(material).length} chars` : "(none)"}`);
     console.log(`   Quantity:    ${qty}`);
     console.log(`   Budget:      $${bdg}`);
-    console.log(`   Destination: ${destination || "not specified"}`);
+    console.log(`   Destination: ${/^[a-z]{2}$/i.test(String(destination || "")) ? destination : destination ? `${String(destination).length} chars` : "not specified"}`);
 
     // ── STEP 1: Get smart keyword from Grok ─────────────────────────────────
     const keyword = await refineKeyword({
