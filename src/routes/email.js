@@ -5,6 +5,7 @@ import {
   sendCaseToSeal,
   isTestRecord,
   qaRouting,
+  reportRouting,
   scrubEmails,
 } from "../services/email.js";
 import { registerLead, markNotified, leadsPersistent } from "../services/leadStore.js";
@@ -162,7 +163,14 @@ router.post("/report", async (req, res) => {
     if (!isEmail(requester) || !hasSearched(requester) || !verifyReportToken(requester, b.reportToken)) {
       return res.status(403).json({ error: "report_not_allowed", message: "Only the person who ran the search can send this report." });
     }
-    if (isTestRecord(recipientEmail, requester) && qaRouting() !== "ok") return res.status(503).json({ error: "qa_routing_unavailable" });
+    // 02-11e: a QA report (QA requester or recipient) goes only to a QA recipient and only with QA routing
+    // "ok"; anything else is refused HERE, before the daily limits count it and before Resend is called
+    const routing = reportRouting(recipientEmail, requester);
+    if (!routing.ok) {
+      // no addresses: only what was refused and that nothing left
+      console.warn(`⚠️ /email/report: QA report refused (${routing.error}); nothing sent, no limit counted`);
+      return res.status(routing.status).json({ error: routing.error });
+    }
     const toKey = emailKey(recipientEmail);
     const byKey = emailKey(requester);
     if (!underCap(sentTo, toKey, 3) || !underCap(sentBy, byKey, 10)) {
@@ -199,6 +207,9 @@ router.post("/report", async (req, res) => {
     res.json({ success: true, delivered: result.delivered, forwarded: !!result.forwarded });
   } catch (err) {
     console.error("❌ /email/report:", scrubEmails(err.message));
+    // the sender's own QA guard (defence in depth): the same safe codes as the route
+    if (err?.code === "qa_routing_unavailable") return res.status(503).json({ error: err.code });
+    if (err?.code === "qa_recipient_not_allowed") return res.status(403).json({ error: err.code });
     res.status(500).json({ error: "Could not send email" });
   }
 });
