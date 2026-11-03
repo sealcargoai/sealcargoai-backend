@@ -25,3 +25,40 @@ Versión `2026.11.02-e`.
 Frontend: el rechazo 403 `qa_recipient_not_allowed` muestra «Envío de prueba bloqueado…» y no descarga el PDF de «no se pudo enviar».
 
 Sigue dependiendo de Railway: `QA_EMAILS` (cuentas QA, también las que reciben informes de prueba) y `QA_LEADS_EMAIL`. `ADMIN_EMAIL`, `ADMIN2_EMAIL` y `QA_NOTIFY_EMAILS` reciben las copias de las pruebas (si alguna es comercial se descarta). El limitador general por IP de `/api/email` (10 por hora) sí cuenta también las solicitudes rechazadas; no se cambió.
+
+## 02-11f — destinatarios de informes QA por buzón exacto
+
+Versión `2026.11.02-f`.
+
+**Causa raíz.** `qaRecipientAllowed()` autorizaba destinatarios con `emailKey()`, la clave de cuotas e
+identificación, que quita `+etiqueta` en cualquier dominio. `qa1+otra-cuenta@dominio` se aceptaba como
+`qa1@dominio`, aunque que un alias `+` llegue al buzón base depende de cada dominio y no está garantizado.
+
+**Decisión de normalización.** Se separan dos decisiones:
+
+| Decisión | Regla | Por qué |
+|---|---|---|
+| Cuotas e identificación de la cuenta que pide (`emailKey`, sin cambios) | Amplia: sin `+etiqueta` en cualquier dominio; puntos solo en Gmail | Un alias no regala búsquedas, y el solicitante `qa1+x@` sigue siendo QA y queda aislado |
+| Rechazo de direcciones comerciales (`isCommercial`, sin cambios) | Amplia (`emailKey`) | Todo lo que *pueda* llegar a ventas se rechaza |
+| Autorización de un destinatario QA (`mailboxAddress`, nuevo) | Exacta: espacios externos y mayúsculas; puntos y `+` solo en gmail.com / googlemail.com (regla documentada por Google) | Solo se autoriza lo que *seguro* llega a un buzón QA |
+
+Un alias de otro dominio se autoriza únicamente si está escrito tal cual en `QA_EMAILS` (por ejemplo
+`qa+informes@dominio`); eso no autoriza la base `qa@dominio` ni otros alias.
+
+**Corrección.** `quotaStore.mailboxAddress()` e `isQaMailbox()`. En `email.js`, `qaRecipientAllowed()` usa
+el buzón exacto contra `QA_EMAILS` y `QA_LEADS_EMAIL`. Además, el BCC excluye al destinatario por buzón
+exacto. En la ruta, una dirección de más de 254 caracteres se rechaza (400) en vez de recortarse. Antes, el
+recorte podía dejar otra dirección válida y el informe de un cliente real salía a esa dirección.
+
+**Pruebas.** `test/qa-recipient-exact.test.mjs` (12):
+- tabla de 8 destinatarios autorizados y 25 rechazados: alias `+` no configurado, puntos fuera de Gmail, ventas y sus alias (también listada por error en `QA_EMAILS`), externos, formatos inválidos, listas, nombre visible, salto de línea, cirílico y más de 254 caracteres;
+- servidor real con Resend simulado: cero llamadas a Resend y límites diarios intactos ante 75 rechazos; 6 envíos válidos y 6 rechazados en paralelo, de los que exactamente 3 pasan el tope por destinatario; envío a los autorizados solo a destinos QA, buzón QA sin copia a sí mismo, reenvío fallido solo a QA, cliente real por el flujo comercial y logs sin direcciones.
+
+`qa-report-isolation.test.mjs` ahora rechaza `QA1+informe@prueba.test`. Mutaciones comprobadas: regla
+amplia de vuelta, sin chequeo de destinatario, sin exclusión comercial y sin chequeo en la ruta. En cada
+mutación fallan pruebas.
+
+**Supuesto pendiente.** Si el equipo quiere recibir informes en un alias `+` de un dominio propio, debe
+escribir ese alias exacto en `QA_EMAILS` en Railway.
+
+Comportamiento que se mantiene a propósito: un cliente real que envía a un alias de una cuenta QA (`qa1+x@`) cuenta como operación QA y se rechaza. Es la opción segura, porque nunca termina en ventas.
