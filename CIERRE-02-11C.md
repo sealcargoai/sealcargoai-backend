@@ -335,7 +335,7 @@ Versión `2026.11.03-m`. Pruebas nuevas en `test/verificacion-02-11m.test.mjs` (
     - los códigos anteriores siguen valiendo durante sus 15 minutos;
     - la misma respuesta para todas las direcciones.
   - Una espera de más de 5 minutos se redondea a múltiplos de 5 minutos, para no revelar cuándo pidieron otros.
-- **Fuerza bruta:** 5 intentos por IP y hora contra 12 códigos vigentes, sobre unos 1.1·10¹² combinaciones. Con 10 000 IPs sostenidas durante un año, la probabilidad de acertar sigue por debajo de 10⁻³.
+- **Fuerza bruta:** 5 intentos por IP y hora contra 12 códigos vigentes, sobre unos 1.1·10¹² combinaciones. Con 10 000 IPs sostenidas durante un año, la probabilidad de acertar sigue por debajo de 10⁻³. **Esta cifra estaba subestimada: la cota correcta para 8 caracteres era ~4.8·10⁻³ (0.48 %). Se corrigió en 02-11n.**
 - **Volumen máximo que un tercero puede mandar a una dirección:** 12 por hora, y solo con al menos 4 IPs. No hay tope diario, porque ese tope era la palanca de bloqueo; queda documentado.
 
 ### 4. Topes diarios de informes
@@ -368,3 +368,83 @@ Versión `2026.11.03-m`. Pruebas nuevas en `test/verificacion-02-11m.test.mjs` (
 - La entrega real y el estado «Verified» en Resend no se verificaron.
 - `/health` es público y muestra estados de configuración, sin valores.
 - Un tercero con muchas IPs puede mandar hasta 12 códigos por hora a una dirección: es un costo de no bloquear al titular.
+
+
+## 02-11n — corrección del cálculo de riesgo, código de 10 caracteres y versión estable candidata
+
+Versión `2026.11.03-n` (backend y frontend). Base: la candidata `fix-02-11m`.
+
+### Cálculo de riesgo de los códigos (corregido)
+
+**La cifra de 02-11m estaba subestimada.** Decía que, con 10 000 IP durante un año, el riesgo quedaba por debajo de 10⁻³. No se contó que un atacante puede concentrar todos sus intentos mientras están vigentes los 12 códigos que él mismo pide. Con 8 caracteres, la cota real era 4.77·10⁻³ (0.48 %).
+
+**Modelo** (`scripts/riesgo-codigos.mjs`, que lee los parámetros reales de `verifyStore.js`):
+
+| Símbolo | Significado | Valor |
+|---|---|---|
+| N | Combinaciones posibles: alfabeto^longitud | 32¹⁰ ≈ 1.126·10¹⁵ (antes 32⁸ ≈ 1.100·10¹²) |
+| V | Códigos vigentes a la vez para un buzón | ≤ 12, el tope por hora y dirección. El atacante los pide juntos y valen 15 min. |
+| g | Intentos fallidos por IP y dirección por hora | 5. Una IP puede gastarlos dentro de esos 15 min. |
+| K | Conexiones distintas del atacante | IPv4, o un /64 en IPv6 |
+| H | Horas de ataque sostenido | 8 760 (un año) |
+
+Fórmulas, con G = g·K·H intentos en total:
+
+- **Cota conservadora** (atacante óptimo, que concentra todo): P ≤ 1 − (1 − V/N)^G ≈ G·V/N
+- **Probabilidad esperada** (los pedidos repartidos en la hora): V_prom = 12 · 15/60 = 3, y P ≈ G·V_prom/N
+
+**Resultados para 1 año con 10 caracteres** (tabla generada por el script; la prueba `test/riesgo-codigos.test.mjs` exige que coincida):
+
+| K (IP) | cota conservadora | esperada |
+|---|---|---|
+| 1,000 | 4.67e-7 | 1.17e-7 |
+| 10,000 | 4.67e-6 | 1.17e-6 |
+| 100,000 | 4.67e-5 | 1.17e-5 |
+
+Con 8 caracteres, los mismos casos daban 4.78e-4, 4.77e-3 y 4.67e-2: con 100 000 IP no se alcanzaba el objetivo de 10⁻⁴.
+
+**Cambio aplicado:**
+- Código de **10 caracteres** (unos 50 bits), mostrado como `ABCDE-FGHJK`.
+- No se agregó ningún bloqueo por dirección, así que el titular no queda fuera.
+- Todo lo demás se mantiene: 15 minutos de vigencia, códigos anteriores válidos, 5 fallos por hora que bloquean solo esa IP, y 12 códigos por hora por dirección.
+
+**No son garantías:** estas cifras salen de un modelo. No cubren fallas de implementación, el robo del buzón, ni un atacante con más de 100 000 conexiones (por ejemplo, una red de bots muy grande o muchos /48 de IPv6).
+
+**Prueba de regresión** (`test/riesgo-codigos.test.mjs`):
+- La cota con los parámetros reales debe ser < 10⁻⁴ para 100 000 IP en un año.
+- Las cifras de esta tabla deben coincidir con el cálculo.
+- La cifra de 8 caracteres se considera subestimada.
+- Con el código de 8 caracteres, la primera prueba falla.
+
+### Persistencia en Railway (revisada otra vez el 03-11-2026, solo lectura)
+
+- **Volumen:** `sealcargoai-backend-volume`, montado en `/data`. Se leyó en Volume → Settings → Mount path.
+- **Variables del servicio (23):**
+  - `DATA_DIR` = `/data`. Revelé solo ese valor, que es una ruta, y volví a ocultarlo.
+  - No existen `VERIFY_DATA_DIR`, `VERIFY_SECRET`, `REPORT_SECRET` ni `EMAIL_DRY_RUN`.
+- **Réplicas:** Railway dice «Replicas are not available for attached volumes»; el servicio corre en una sola instancia.
+- **Clave de los hashes:** sale del archivo `report-secret` en `DATA_DIR`, es decir, en `/data`, dentro del volumen.
+  - La producción actual (02-11l) reporta `verifyStore: "persistent"`. Eso solo ocurre si el secreto se leyó o creó en el volumen.
+  - El campo `/health.storage`, que muestra `on-volume` y el origen de la clave, llega con esta versión. **En producción todavía no se puede ver** hasta publicar.
+
+### Resend (solo lectura)
+
+- **Dominio del remitente:** `seal-ai.sealcargo.com.gt`. La dirección completa no se copia.
+- **DNS público** (dns.google):
+  - DKIM `resend._domainkey`: presente (`p=…`).
+  - `send.`: SPF `v=spf1 include:amazonses.com ~all` y MX `feedback-smtp.us-east-1.amazonses.com`.
+  - DMARC del dominio principal: `p=none`.
+- **Panel de Resend:** no hay sesión iniciada y no se inició ninguna, así que el estado «Verified» no se vio.
+- `/health.emailSender.domain = "no_access"` solo indica que la clave de producción no puede leer `/domains`. **No prueba que el envío falle, ni acredita que el dominio esté verificado.**
+- **La entrega real no se verificó:** no se envió ningún correo.
+
+### Otros ajustes
+
+- Si un correo ya recibió los 3 informes del día, la pantalla ahora lo dice así en ES/EN («máximo de informes de hoy (3 en 24 horas)») y descarga el PDF. Antes decía «no pudimos enviarlo desde aquí».
+
+### Riesgo residual por volumen de códigos
+
+- **Por buzón:** un tercero con 4 o más IP puede hacer que un mismo buzón reciba hasta 12 códigos por hora (288 por día). Para el titular es molestia o spam, pero no le impide verificar.
+- **Global:** el tope de 300 códigos por hora protege la reputación del remitente. A cambio, un atacante con unas 30 IP puede agotarlo y dejar la verificación sin servicio para todos durante una hora.
+- **Proveedor de correo:** demasiados rebotes o quejas pueden llevar a Resend o a Gmail a limitar el remitente. Se recomienda vigilar el panel de Resend (rebotes y quejas).
+- Para reducirlo más haría falta un CAPTCHA o un servicio anti-abuso. Requiere credenciales nuevas y posiblemente costo; no se agregó.
