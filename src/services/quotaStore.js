@@ -17,14 +17,25 @@ const EMAIL_RE = /^[^\s@<>"',;]+@[^\s@<>"',;]+\.[a-z]{2,}$/i;
 export { SEARCH_LIMIT, IP_SEARCH_LIMIT };
 
 
-/** A valid email (max 254 chars), lowercase and trimmed; "" otherwise. */
+/**
+ * A valid email (max 254 chars), lowercase and trimmed; "" otherwise.
+ * 02-11h: printable ASCII only, checked on the input BEFORE lowercasing. toLowerCase() folds some
+ * non-ASCII letters into ASCII ones (Kelvin sign «\u212A» → «k», «\u0130» → «i\u0307»…), so a Unicode
+ * address could become a DIFFERENT ASCII one: «\u212Aa@prueba.test» was counted, classified as QA and
+ * given the report token of «ka@prueba.test». This service does not support SMTPUTF8/IDN addresses
+ * (no safe normalization is guaranteed): they are refused, never converted. An IDN domain still works
+ * written in its ASCII form (xn--…).
+ */
+export const ASCII_EMAIL_CHARS = /^[\x21-\x7e]+$/;
 export function normalizeEmail(value) {
   if (typeof value !== "string") return "";
-  const v = value.trim().toLowerCase();
+  const t = value.trim();
+  if (!ASCII_EMAIL_CHARS.test(t)) return "";
+  const v = t.toLowerCase();
   return v.length <= 254 && EMAIL_RE.test(v) ? v : "";
 }
 
-/** The key the quota is counted by. */
+/** The key the QUOTA is counted by (broad on purpose: never used to authorize anything). */
 export function emailKey(value) {
   const v = normalizeEmail(value);
   if (!v) return "";
@@ -67,6 +78,12 @@ const QA_MAILBOXES = new Set(
     .map((e) => mailboxAddress(e))
     .filter(Boolean),
 );
+/**
+ * 02-11h: the IDENTITY of an address for everything that authorizes (who searched, whose report token,
+ * who may receive a QA report): its exact mailbox (mailboxAddress: ASCII, trimmed, lowercase; Gmail's
+ * documented rule only). Quotas keep the broad emailKey.
+ */
+export const identityKey = (email) => mailboxAddress(email);
 /** A QA account written in QA_EMAILS, compared by exact mailbox (see mailboxAddress). */
 export const isQaMailbox = (email) => !!email && QA_MAILBOXES.has(mailboxAddress(email));
 
@@ -150,10 +167,13 @@ export function reserveSearch(email, ip) {
   if (limitReason(email, ip)) return null;
   const qa = isQa(email);
   const key = emailKey(email);
+  // 02-11h: the search is recorded for the IDENTITY that ran it (not the quota key): only that exact
+  // mailbox can later send its report
+  const who = identityKey(email);
   // only a search that showed results lets this email send its report (see routes/email.js)
   const markSearched = () => {
-    if (!key) return;
-    searched.set(key, Date.now());
+    if (!who) return;
+    searched.set(who, Date.now());
     scheduleSave();
   };
   if (qa) return { commit: markSearched, release() {} };
@@ -184,7 +204,7 @@ export function reserveSearch(email, ip) {
 
 /** The email ran at least one search in the last 7 days. */
 export function hasSearched(email) {
-  const at = searched.get(emailKey(email));
+  const at = searched.get(identityKey(email));
   return !!at && Date.now() - at < 7 * 24 * 60 * 60 * 1000;
 }
 
@@ -225,9 +245,11 @@ export function verifySigned(text, token) {
   return typeof token === "string" && token.length === want.length && crypto.timingSafeEqual(Buffer.from(want), Buffer.from(token));
 }
 export function reportToken(email) {
-  const key = emailKey(email);
-  if (!key) return "";
-  return crypto.createHmac("sha256", reportSecret).update(`report:${key}`).digest("base64url").slice(0, 32);
+  // 02-11h: bound to the identity (exact mailbox), not the quota key: the token of «qa1+x@dominio»
+  // or of a Unicode look-alike is not the token of «qa1@dominio»
+  const id = identityKey(email);
+  if (!id) return "";
+  return crypto.createHmac("sha256", reportSecret).update(`report:${id}`).digest("base64url").slice(0, 32);
 }
 export function verifyReportToken(email, token) {
   const want = reportToken(email);

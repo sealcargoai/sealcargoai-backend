@@ -11,7 +11,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { emailKey } from "./quotaStore.js";
+import { identityKey } from "./quotaStore.js";
 
 export const STATUSES = ["recibido", "contactado", "calificado", "cotizado", "cliente", "descartado"];
 export const STAGES = ["recibido", "contactado", "calificado", "cotizado", "cliente"]; // in order
@@ -36,7 +36,9 @@ const norm = (s) =>
 
 /** What makes two requests the same case: person + product + supplier. */
 export function dedupeKey({ email, product, supplierUrl, supplierName }) {
-  return [emailKey(email) || norm(email), norm(product), norm(supplierUrl || supplierName)].join("|");
+  // 02-11h: the person is the exact mailbox (identityKey), not the quota key: a QA alias «juan+qa@» and
+  // the client «juan@» are different people (a QA case used to be merged into the real one and reclassify it)
+  return [identityKey(email) || norm(email), norm(product), norm(supplierUrl || supplierName)].join("|");
 }
 
 function newId(now) {
