@@ -32,9 +32,14 @@ let ip = 0;
 const post = (p, body) => fetch(BASE + p, { method: "POST", headers: { "content-type": "application/json", "x-real-ip": `10.50.0.${++ip}` }, body: JSON.stringify(body) });
 const REAL = { name: "Lucía Herrera", email: "lucia.herrera@importadora.gt", product: "Sillas plásticas apilables", message: "Mi teléfono es 5555-1234" };
 
-test("defaults: real case → only the commercial inbox; dev copies don't get it", async () => {
+test("defaults: real case → only the commercial inbox; QA routing missing is reported (status only)", async () => {
   srv = await start();
-  assert.match(logs, /Recipients:\s+real → 1 commercial; tests → commercial \+ 2 dev/);
+  await new Promise((r) => setTimeout(r, 300)); // the warning goes to stderr right after the start line
+  assert.match(logs, /Recipients:\s+real → 1 commercial; tests → NOT SENT/);
+  assert.match(logs, /QA routing missing: test records \(QA_EMAILS\) will be refused/);
+  const h = await (await fetch(BASE + "/health")).json();
+  assert.equal(h.qaRouting, "missing");
+  assert.doesNotMatch(JSON.stringify(h), /@/, "no addresses on /health");
   const j = await (await post("/api/email/quote", REAL)).json();
   assert.equal(j.test, false);
   assert.deepEqual(mails().at(-1).to, ["ventas@seal.com.gt"]);
@@ -43,26 +48,39 @@ test("defaults: real case → only the commercial inbox; dev copies don't get it
   assert.deepEqual(d.notifiedTo, ["ve***@seal.com.gt"]);
 });
 
-test("identified tests (test words or a QA_EMAILS account) → commercial (marked [PRUEBA]) + dev copies", async () => {
-  const a = await (await post("/api/email/quote", { name: "PRUEBA — NO ATENDER COMERCIALMENTE", email: "qa.ficticio@example.com", product: "Guantes" })).json();
-  assert.equal(a.test, true);
-  let m = mails().at(-1);
-  assert.deepEqual(m.to, ["ventas@seal.com.gt", "dev1@agencia.test.com", "dev2@agencia.test.com"]);
-  assert.match(m.subject, /^\[PRUEBA\]/);
-  await post("/api/email/quote", { name: "Ana", email: "qa.cuenta@empresa.gt", product: "Termos" });
-  m = mails().at(-1);
-  assert.deepEqual(m.to, ["ventas@seal.com.gt", "dev1@agencia.test.com", "dev2@agencia.test.com"]);
+test("words never make a record a test: «PRUEBA», example.com, «demo», «unidad de prueba», «testing», «ejemplo» are real leads", async () => {
+  for (const body of [
+    { name: "PRUEBA — NO ATENDER COMERCIALMENTE", email: "qa.ficticio@example.com", product: "Guantes" },
+    { name: "Carlos Demo", email: "compras@demo-industrial.gt", product: "Unidad de prueba de compresor (demo para cliente)" },
+    { name: "Ana Testing", email: "ana@testing.com.gt", product: "Kit de prueba de pH, ejemplo de catálogo" },
+  ]) {
+    const n = mails().length;
+    const a = await (await post("/api/email/quote", body)).json();
+    assert.equal(a.test, false, `real: ${body.name}`);
+    const m = mails().at(-1);
+    assert.equal(mails().length, n + 1);
+    assert.deepEqual(m.to, ["ventas@seal.com.gt"]);
+    assert.doesNotMatch(m.subject, /\[PRUEBA\]/);
+  }
+  const n = mails().length;
+  await post("/api/email/lead", { name: "Prueba QA", email: "qa@example.com", query: "Unidades de prueba para demo, testing de ejemplo" });
+  assert.deepEqual(mails().at(-1).to, ["ventas@seal.com.gt"]);
+  assert.doesNotMatch(mails().at(-1).subject, /PRUEBA\]/);
+  assert.equal(mails().length, n + 1);
 });
 
-test("the other emails follow the same rule: landing lead, search lead, report copy", async () => {
-  await post("/api/email/lead", { name: "Lucía Herrera", email: "lucia.herrera@importadora.gt", query: "Sillas plásticas apilables para eventos" });
-  assert.deepEqual(mails().at(-1).to, ["ventas@seal.com.gt"]);
-  await post("/api/email/lead", { name: "Prueba QA", email: "qa@example.com", query: "Sillas plásticas apilables para eventos" });
-  assert.deepEqual(mails().at(-1).to, ["ventas@seal.com.gt", "dev1@agencia.test.com", "dev2@agencia.test.com"]);
+test("a QA account (QA_EMAILS) without QA routing: refused with 503, nothing registered or emailed, never to sales", async () => {
+  const n = mails().length;
+  const q = await post("/api/email/quote", { name: "Ana", email: "qa.cuenta@empresa.gt", product: "Termos" });
+  assert.equal(q.status, 503);
+  assert.deepEqual(await q.json(), { error: "qa_routing_unavailable" });
+  const l = await post("/api/email/lead", { name: "Ana", email: "QA.Cuenta+x@empresa.gt", query: "Termos de acero para oficina" });
+  assert.equal(l.status, 503);
+  assert.equal(mails().length, n, "no email at all");
 });
 
 test("follow-up: needs a person's name, records who and when, survives a restart", async () => {
-  const j = await (await post("/api/email/quote", { name: "Prueba Seguimiento", email: "seg@example.com", product: "Cables" })).json();
+  const j = await (await post("/api/email/quote", { name: "Seguimiento Real", email: "seg@importadora.gt", product: "Cables" })).json();
   const html = mails().at(-1).html;
   const act = (s) => new URL(html.match(new RegExp(`href="([^"]+s=${s}[^"]+)"`))[1].replace(/&amp;/g, "&"));
   const form = (u, body) => fetch(BASE + u.pathname, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body });
@@ -91,10 +109,10 @@ test("follow-up: needs a person's name, records who and when, survives a restart
   const cu = new URL(j.caseUrl);
   const d = await (await fetch(BASE + cu.pathname + cu.search + "&format=json")).json();
   assert.equal(d.status, "cliente");
-  assert.equal(d.test, true);
+  assert.equal(d.test, false);
 });
 
-test("tests and QA sessions don't inflate the commercial funnel", async () => {
+test("QA sessions don't inflate the commercial funnel", async () => {
   const html = mails().at(-1).html;
   const f = new URL(html.match(/href="([^"]+funnel[^"]+)"/)[1].replace(/&amp;/g, "&"));
   for (let i = 0; i < 3; i++) await post("/api/events", { event: "visita", vid: `qa-vid-${i}-xxxx`, qa: true });
@@ -102,10 +120,10 @@ test("tests and QA sessions don't inflate the commercial funnel", async () => {
   const j = await (await fetch(BASE + f.pathname + f.search + "&format=json")).json();
   assert.equal(j.stages["Visitas"], 1);
   assert.equal(j.qaEvents.visita, 3);
-  // only the real case counts as a request; the test cases (and their "cliente") don't
-  assert.equal(j.stages["Solicitudes recibidas (registradas con número)"], 1);
-  assert.equal(j.stages["Clientes"], 0);
-  assert.deepEqual(j.recipients, { commercial: 1, devCopies: 2, qaInbox: 0, devGetsReal: false });
+  // the five real cases count (the refused QA case was never registered); one became a client
+  assert.equal(j.stages["Solicitudes recibidas (registradas con número)"], 5);
+  assert.equal(j.stages["Clientes"], 1);
+  assert.deepEqual(j.recipients, { commercial: 1, devCopies: 2, qaInbox: 0, devGetsReal: false, qaRouting: "missing" });
 });
 
 test("a controlled test with customer data uses the customer routing, then is excluded from the metrics", async () => {
@@ -133,10 +151,30 @@ test("a controlled test with customer data uses the customer routing, then is ex
 test("explicit authorization and a QA inbox change the routing as configured", async () => {
   await stop(srv);
   srv = await start({ DEV_COPIES_REAL_LEADS: "1", LEADS_CC: "gerencia@seal.com.gt", QA_LEADS_EMAIL: "qa@seal.com.gt" });
+  assert.equal((await (await fetch(BASE + "/health")).json()).qaRouting, "ok");
   await post("/api/email/quote", { ...REAL, product: "Mesas" });
   assert.deepEqual(mails().at(-1).to, ["ventas@seal.com.gt", "gerencia@seal.com.gt", "dev1@agencia.test.com", "dev2@agencia.test.com"]);
-  await post("/api/email/quote", { name: "Prueba", email: "p@example.com", product: "Mesas" });
+  // a QA account → QA inbox + dev copies, marked; a word-only "test" is still a real lead
+  const q = await (await post("/api/email/quote", { name: "Ana", email: "qa.cuenta@empresa.gt", product: "Mesas" })).json();
+  assert.equal(q.test, true);
   assert.deepEqual(mails().at(-1).to, ["qa@seal.com.gt", "dev1@agencia.test.com", "dev2@agencia.test.com"]);
+  assert.match(mails().at(-1).subject, /^\[PRUEBA\] /);
+  await post("/api/email/lead", { name: "Ana", email: "qa.cuenta@empresa.gt", query: "Mesas plegables para eventos" });
+  assert.deepEqual(mails().at(-1).to, ["qa@seal.com.gt", "dev1@agencia.test.com", "dev2@agencia.test.com"]);
+  await post("/api/email/quote", { name: "Prueba", email: "p@example.com", product: "Mesas de prueba" });
+  assert.deepEqual(mails().at(-1).to, ["ventas@seal.com.gt", "gerencia@seal.com.gt", "dev1@agencia.test.com", "dev2@agencia.test.com"]);
+});
+
+test("an invalid QA inbox, or one that is a commercial address, is not a QA route", async () => {
+  for (const [qa, status] of [["no-es-un-correo", "invalid"], ["ventas@seal.com.gt", "overlaps_commercial"], ["Gerencia@Seal.com.gt", "overlaps_commercial"]]) {
+    await stop(srv);
+    srv = await start({ QA_LEADS_EMAIL: qa, LEADS_CC: "gerencia@seal.com.gt" });
+    assert.equal((await (await fetch(BASE + "/health")).json()).qaRouting, status, qa);
+    const n = mails().length;
+    const r = await post("/api/email/quote", { name: "Ana", email: "qa.cuenta@empresa.gt", product: "Sillas" });
+    assert.equal(r.status, 503, qa);
+    assert.equal(mails().length, n, `nothing sent with ${qa}`);
+  }
 });
 
 test("no client data in the server logs", () => {

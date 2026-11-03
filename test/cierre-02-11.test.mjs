@@ -9,7 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { refineKeyword } from "../src/routes/ai.js";
 
-function server(portBase) {
+function server(portBase, extraEnv = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seal-0211-"));
   const MAIL_LOG = path.join(dir, "mails.jsonl");
   const s = { dir, MAIL_LOG, BASE: "", proc: null };
@@ -31,6 +31,7 @@ function server(portBase) {
           PUBLIC_API_URL: "",
           GROQ_API_KEY: "",
           EMAIL_DRY_RUN: "",
+          ...extraEnv,
         },
         stdio: ["ignore", "pipe", "pipe"],
       });

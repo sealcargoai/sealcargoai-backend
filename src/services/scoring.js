@@ -45,7 +45,7 @@ function criteria(s, meanRating) {
 
   // 1. Verification (always known: we can tell if it has a badge or not)
   const verification = audited
-    ? { score: 100, detail: "Proveedor verificado (auditoría de tercero)" }
+    ? { score: 100, detail: "Insignia de la plataforma: Verified Supplier (auditoría de un tercero, no de SEAL)" }
     : gold
       ? { score: 33, detail: "Miembro Gold (membresía, sin auditoría en planta)" }
       : { score: 0, detail: "Sin insignia de verificación" };
@@ -175,13 +175,14 @@ function getRejectReason(s, { trustScore, quantity }) {
   const audited = s.verifiedSupplier === true;
   const years = s.yearsInBusiness || 0;
   if (!audited && !s.goldSupplier) {
-    return "Sin verificación (no es proveedor verificado ni miembro Gold)";
+    // 02-11c: the platform's badges, said as such (SEAL verifies no supplier)
+    return "Sin insignias de la plataforma (ni Verified Supplier ni miembro Gold)";
   }
   if (!audited && years < FILTERS.minGoldYears) {
     return `Miembro Gold con menos de ${FILTERS.minGoldYears} años`;
   }
   if (s.rating && (s.reviews || 0) >= FILTERS.minReviewsForRating && s.rating < FILTERS.minRating) {
-    return `Calificación ${s.rating.toFixed(1)} por debajo de ${FILTERS.minRating.toFixed(1)}`;
+    return `Valoración ${s.rating.toFixed(1)} por debajo de ${FILTERS.minRating.toFixed(1)}`; // 02-11c: the platform rating, never «calificado»
   }
   // The minimum is in the listing's sale unit and the quantity in the client's own
   // (pairs, boxes, dozens…), so only an evident gap is a reason to leave a listing

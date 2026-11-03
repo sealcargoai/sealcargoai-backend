@@ -222,7 +222,7 @@ router.get("/leads/funnel", (req, res) => {
         <tr><td>Casos cuyo correo a SEAL falló (revisar)</td><td class="n">${lf.sinNotificar}</td></tr>
         <tr><td>Contactados / descartados</td><td class="n">${lf.contactados} / ${lf.descartados}</td></tr>
       </table></div>
-      <p class="muted">Visitas, consultas y resultados se cuentan una vez por navegador y día. Calificados, cotizaciones y clientes se registran a mano desde el correo de cada caso. Excluye registros y sesiones de prueba. Destinatarios: casos reales → ${rc.commercial} buzón(es) comercial(es)${rc.devGetsReal ? ` + ${rc.devCopies} copia(s) de desarrollo (autorizado)` : ""}; pruebas → ${rc.qaInbox ? "buzón QA" : "buzón comercial"} + ${rc.devCopies} copia(s) de desarrollo. <a href="?t=${e(clean(req.query.t, 64))}&days=7">7 días</a> · <a href="?t=${e(clean(req.query.t, 64))}&days=30">30 días</a> · <a href="?t=${e(clean(req.query.t, 64))}&days=90">90 días</a></p>`,
+      <p class="muted">Visitas, consultas y resultados se cuentan una vez por navegador y día. Calificados, cotizaciones y clientes se registran a mano desde el correo de cada caso. Excluye registros y sesiones de prueba. Destinatarios: casos reales → ${rc.commercial} buzón(es) comercial(es)${rc.devGetsReal ? ` + ${rc.devCopies} copia(s) de desarrollo (autorizado)` : ""}; pruebas (solo cuentas QA) → ${rc.qaRouting === "ok" ? `buzón QA + ${rc.devCopies} copia(s) de desarrollo` : "no se envían (falta configurar el buzón QA)"}. <a href="?t=${e(clean(req.query.t, 64))}&days=7">7 días</a> · <a href="?t=${e(clean(req.query.t, 64))}&days=30">30 días</a> · <a href="?t=${e(clean(req.query.t, 64))}&days=90">90 días</a></p>`,
     ),
   );
 });

@@ -63,7 +63,10 @@ function server(extraEnv, portBase) {
           DATA_DIR: dir,
           MAIL_LOG,
           RESEND_API_KEY: "re_test",
-          LEADS_EMAIL: "qa@example.test",
+          LEADS_EMAIL: "ventas@example.test",
+          // 02-11c: tests are identified by the QA allow-list only, and routed only to the QA inbox
+          QA_EMAILS: "qa.cierre@example.test",
+          QA_LEADS_EMAIL: "qa@example.test",
           ADMIN_EMAIL: "",
           ADMIN2_EMAIL: "",
           PUBLIC_API_URL: "",
@@ -195,7 +198,7 @@ for (const [label, patch, why] of [
 test("EMAIL_DRY_RUN=1: /health says so, a valid case answers normally and NO email reaches the provider", async () => {
   const h = await (await fetch(`${DRY.BASE}/health`)).json();
   assert.equal(h.emailDryRun, true);
-  assert.equal(h.version, "2026.11.02-a");
+  assert.equal(h.version, "2026.11.02-c");
   const r = await DRY.post("/api/email/quote", { ...CASE, name: "Cliente Real Simulado", email: "persona@empresa-ejemplo-real.gt" }, "10.5.0.1");
   assert.equal(r.status, 200);
   assert.equal(DRY.mails().length, 0);
