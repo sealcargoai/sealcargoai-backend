@@ -249,3 +249,35 @@ Versión `2026.11.02-k`. Pruebas nuevas en `test/verificacion-02-11k.test.mjs` (
 **Revisión independiente, sin cambiar:**
 - La autorización se consume aunque el envío falle; el cliente pide otro código.
 - El tope de 40 eventos por IP al día puede subcontar detrás de NAT de operador.
+
+## 02-11l — almacén de verificación persistente, abuso de códigos y remitente
+
+Versión `2026.11.03-l`. Pruebas nuevas en `test/verificacion-02-11l.test.mjs` (16). Con el código de 02-11k fallan 10 de las 11 originales. La única que pasa es la de privacidad, que ya se cumplía antes.
+
+| Sev. | Causa raíz | Cambio |
+|---|---|---|
+| Alta | Los códigos, las sesiones y las autorizaciones vivían en la memoria del proceso. Un reinicio o despliegue los perdía, y dos instancias no se veían entre sí. Con dos procesos, una autorización podía usarse una vez en cada uno. | Se guardan en `DATA_DIR/verify.json` (el volumen de Railway) o en `VERIFY_DATA_DIR` si se define. Cada operación: (1) toma un bloqueo exclusivo (`wx` con nonce; uno abandonado por más de 2 s se toma por `rename` atómico, y solo se libera el bloqueo propio); (2) lee y modifica; (3) escribe con `fsync`; (4) reemplaza con `rename`. `consumeGrant` verifica y borra dentro del mismo bloqueo. Una lectura que no cambia nada no reescribe el archivo. |
+| Alta | Si el almacén fallaba, no había un comportamiento definido. | Falla cerrado: `VerifyStoreError` → 503 `verify_unavailable` («no se envió nada»). Nunca se concede ni se envía. Las búsquedas siguen funcionando, pero una sesión QA no se reconoce, así que aplican los límites normales. Un archivo dañado (no es JSON) se aparta y el almacén arranca vacío: solo se pierden credenciales y contadores. |
+| Media | En el archivo podía quedar algo en claro. | Códigos, tokens, direcciones e IP se guardan como HMAC-SHA256, y el archivo tiene permisos 0600. La clave sale de `VERIFY_SECRET`; si no existe, se deriva del secreto de firma (`REPORT_SECRET` o `DATA_DIR/report-secret`, que ahora se crea con `wx`, así dos procesos no generan secretos distintos). `/health` → `verifyStore`: `persistent`, `persistent-ephemeral-key` (la clave no sobrevive a un reinicio) o `memory`. |
+| Media | Un tercero podía agotar el cupo de una dirección, y sus intentos fallidos anulaban el código del titular. | Límites: (1) por dirección e IP, 3 por hora, con espera progresiva de 0, 30 y 60 s (`Retry-After`); (2) por dirección, 6 por hora; (3) por IP, 10 por hora; (4) global, 300 por hora; (5) como máximo 30 000 claves registradas. Un código nuevo no anula los anteriores (todos valen 15 min). Los fallos se cuentan por dirección e IP: 5 por hora bloquean esa IP, no al titular. Después de 15 fallos al día en una dirección, solo se acepta un código pedido desde la misma IP que lo confirma: el titular entra y una fuerza bruta desde muchas IP no. Las direcciones de ventas de SEAL pasan por los mismos límites, con una demora similar y sin código guardado. |
+| Media | No había forma de saber, sin enviar un correo, si el remitente funcionaría. | `/health` → `emailSender`. `from` es `custom` o `resend-test-sender`. `domain` es el estado que devuelve `GET https://api.resend.com/domains` para el dominio exacto del remitente: `verified`, `pending`, `failed`, `not_found`, `no_access` (la clave no puede leer dominios) o `unknown`. Es solo lectura, no envía correo y no expone la dirección, el dominio ni la clave. |
+
+**Evidencia:**
+- `npm test`: 167 de 167.
+- Concurrencia real: 8 procesos consumen la misma autorización y solo 1 lo logra; 12 procesos piden códigos y nunca salen más de 6. Dos servidores comparten carpeta: el código se pide en A y se confirma en B; un informe enviado a A y B a la vez sale una sola vez.
+- Mutaciones; cada una hace fallar al menos una prueba:
+  - quitar el bloqueo;
+  - consumir en dos pasos;
+  - que los fallos anulen el código;
+  - tope diario sin excepción;
+  - quitar la espera progresiva;
+  - leer un archivo ilegible como vacío;
+  - aceptar tras el tope un código de otra IP.
+
+**Limitaciones:**
+- El archivo con bloqueo sirve para procesos que comparten el volumen (en Railway, una sola réplica con el volumen montado). Para varias réplicas sin volumen compartido hace falta un almacén de red (Redis o Postgres con transacción); hoy no existe en el proyecto.
+- Mientras se espera el bloqueo, el proceso queda detenido como máximo 1 s; si no lo obtiene, responde 503.
+- Un tercero con muchas IP todavía puede llenar el cupo por hora de una dirección y mandarle hasta 6 códigos por hora. El titular conserva los códigos que ya recibió y puede volver a pedir uno después.
+- Los topes diarios de informes (`sentTo`/`sentBy`) siguen en memoria por proceso. Esto viene de antes.
+- Si el envío falla después de consumir la autorización, el cliente tiene que pedir otro código.
+- La entrega real de correos no se probó; todas las pruebas usan Resend simulado.
