@@ -3,7 +3,7 @@ import NodeCache from "node-cache";
 import { searchSuppliers } from "../services/alibaba.js";
 import { scoreSuppliers, categorizeSuppliers } from "../services/scoring.js";
 import { refineKeyword, shortenKeyword } from "./ai.js";
-import { clientIp, clean, malformedFields, QTY_MIN, QTY_MAX, BUDGET_MAX } from "../middleware/security.js";
+import { clientIp, clean, malformedFields, unsupportedEmail, QTY_MIN, QTY_MAX, BUDGET_MAX } from "../middleware/security.js";
 import { sendSearchLead, scrubEmails } from "../services/email.js";
 
 // Send the search to SEAL sales without delaying the user's response
@@ -81,6 +81,11 @@ router.post("/search", async (req, res) => {
       destination,
       userQuery,
     } = req.body;
+    // 02-11h: an unsupported (non-ASCII / invisible-character) email is refused, not dropped or folded:
+    // nothing is searched, counted, recorded or emailed
+    if (unsupportedEmail(req.body.userEmail)) {
+      return res.status(400).json({ error: "email_not_supported", message: "Escriba el correo solo con letras sin tilde, números y signos comunes. / Write the email with plain letters, numbers and common signs only." });
+    }
     const userEmail = normalizeEmail(req.body.userEmail);
     const ip = clientIp(req);
 
