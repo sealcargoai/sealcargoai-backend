@@ -154,11 +154,13 @@ router.post("/quote", async (req, res) => {
 router.post("/report", async (req, res) => {
   try {
     const b = req.body || {};
-    const recipientEmail = clean(b.recipientEmail, 254);
+    // 02-11f: an address longer than 254 characters is refused, not cut (cutting it could leave a
+    // different, valid address)
+    const recipientEmail = typeof b.recipientEmail === "string" && b.recipientEmail.trim().length > 254 ? "" : clean(b.recipientEmail, 254);
     if (!isEmail(recipientEmail)) {
       return res.status(400).json({ error: "a valid recipientEmail is required" });
     }
-    const requester = clean(b.requesterEmail, 254);
+    const requester = typeof b.requesterEmail === "string" && b.requesterEmail.trim().length > 254 ? "" : clean(b.requesterEmail, 254);
     // the requester must have searched AND hold the token that search returned
     if (!isEmail(requester) || !hasSearched(requester) || !verifyReportToken(requester, b.reportToken)) {
       return res.status(403).json({ error: "report_not_allowed", message: "Only the person who ran the search can send this report." });

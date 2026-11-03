@@ -45,6 +45,33 @@ export function emailKey(value) {
 
 export const isQa = (email) => !!email && QA.has(emailKey(email));
 
+// ── 02-11f: the MAILBOX an address is delivered to, for AUTHORIZING a recipient ─────────────
+// emailKey() above is broad on purpose (quota and identification: "ana+1@x" shares Ana's searches),
+// but it must never decide who may RECEIVE something: whether «+etiqueta» reaches the base mailbox
+// depends on each domain, and dots only don't matter at Gmail. So an authorization compares the
+// exact address (trimmed, lowercase). The only domain rule applied is Google's documented one for
+// gmail.com / googlemail.com (dots ignored, «+etiqueta» delivered to the same inbox, both domains
+// the same inbox). Any other alias is accepted only when it is itself written in the allow-list.
+const GMAIL = new Set(["gmail.com", "googlemail.com"]);
+export function mailboxAddress(value) {
+  const v = normalizeEmail(value);
+  if (!v) return "";
+  const at = v.lastIndexOf("@");
+  let user = v.slice(0, at);
+  const domain = v.slice(at + 1);
+  if (!GMAIL.has(domain)) return v;
+  user = user.replace(/\+.*$/, "").replace(/\./g, "");
+  return user ? `${user}@gmail.com` : "";
+}
+const QA_MAILBOXES = new Set(
+  String(process.env.QA_EMAILS || "")
+    .split(",")
+    .map((e) => mailboxAddress(e))
+    .filter(Boolean),
+);
+/** A QA account written in QA_EMAILS, compared by exact mailbox (see mailboxAddress). */
+export const isQaMailbox = (email) => !!email && QA_MAILBOXES.has(mailboxAddress(email));
+
 // email key -> { count, pending }
 const emails = new Map();
 // ip -> { count, pending, resetAt }

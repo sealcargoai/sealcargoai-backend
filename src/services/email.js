@@ -1,6 +1,6 @@
 import { Resend } from "resend";
 import { escapeHtml as e } from "../middleware/security.js";
-import { isQa, emailKey } from "./quotaStore.js";
+import { isQa, isQaMailbox, emailKey, mailboxAddress } from "./quotaStore.js";
 
 /* ─────────────────────────────────────────────
    Safe Resend Client Creator
@@ -43,14 +43,15 @@ const LEADS_EMAIL = process.env.LEADS_EMAIL || "ventas@seal.com.gt";
 const emailList = (...values) =>
   [...new Set(values.flatMap((v) => String(v || "").split(",")).map((x) => x.trim().toLowerCase()).filter((x) => /^[^\s@]+@[^\s@]+\.[a-z]{2,}$/.test(x)))];
 const COMMERCIAL = emailList(LEADS_EMAIL, process.env.LEADS_CC);
-// 02-11e: addresses are compared by mailbox (emailKey: case, «+etiqueta» and Gmail dots ignored).
+// 02-11e: commercial addresses are matched BROADLY (emailKey: case, «+etiqueta» and Gmail dots ignored) to REFUSE them;
 // «ventas+qa@…» is delivered to ventas@: it is a commercial address, never a QA one.
 const COMMERCIAL_KEYS = new Set(COMMERCIAL.map((x) => emailKey(x)).filter(Boolean));
 const isCommercial = (x) => COMMERCIAL_KEYS.has(emailKey(x));
 const DEV_COPIES = emailList(process.env.ADMIN_EMAIL, process.env.ADMIN2_EMAIL, process.env.QA_NOTIFY_EMAILS).filter((x) => !isCommercial(x));
 const QA_INBOX_RAW = String(process.env.QA_LEADS_EMAIL || "").trim();
 const QA_INBOX = emailList(QA_INBOX_RAW);
-const QA_INBOX_KEYS = new Set(QA_INBOX.map((x) => emailKey(x)).filter(Boolean));
+// 02-11f: the QA inbox as an exact mailbox (an authorization; see mailboxAddress)
+const QA_INBOX_MAILBOXES = new Set(QA_INBOX.map((x) => mailboxAddress(x)).filter(Boolean));
 const DEV_GETS_REAL = process.env.DEV_COPIES_REAL_LEADS === "1";
 
 // 02-11c: a test is identified ONLY by an explicit signal: the requester's email is in the QA
@@ -93,13 +94,16 @@ export function recipientsFor(test) {
   return [...new Set([...COMMERCIAL, ...(DEV_GETS_REAL ? DEV_COPIES : [])])];
 }
 /**
- * 02-11e: a recipient a QA operation may send a report to: a QA account (QA_EMAILS) or the QA inbox
- * (QA_LEADS_EMAIL), and never a commercial address. Decided only by the server's lists.
+ * 02-11e/f: a recipient a QA operation may send a report to: an address written in QA_EMAILS or the QA
+ * inbox (QA_LEADS_EMAIL), compared by EXACT mailbox (trimmed, lowercase; Gmail's documented rule only),
+ * and never a commercial address. The two comparisons are deliberately different: anything that MIGHT
+ * reach sales is refused (broad emailKey: «ventas+x@», «VENTAS@»), and only what surely reaches a QA
+ * mailbox is allowed (exact: «qa1+otra@dominio» is NOT qa1@dominio unless it is itself listed).
  */
 export function qaRecipientAllowed(email) {
-  const k = emailKey(email);
-  if (!k || COMMERCIAL_KEYS.has(k)) return false;
-  return isQa(email) || QA_INBOX_KEYS.has(k);
+  const m = mailboxAddress(email);
+  if (!m || isCommercial(email)) return false;
+  return isQaMailbox(email) || QA_INBOX_MAILBOXES.has(m);
 }
 /**
  * 02-11e: the routing decision for a report, shared by the route (before any limit is counted) and the
@@ -435,7 +439,8 @@ export async function sendReportToUser({
     to: recipientEmail,
     // 02-11e: the recipient is not copied to itself (a report to the QA inbox arrived there twice)
     ...(() => {
-      const bcc = copies.filter((x) => emailKey(x) !== emailKey(recipientEmail));
+      // (by exact mailbox: an alias of a copy is not assumed to reach it, so the copy still goes)
+      const bcc = copies.filter((x) => mailboxAddress(x) !== mailboxAddress(recipientEmail));
       return bcc.length ? { bcc } : {};
     })(),
     subject: `${en ? "Your SEAL report" : "Su informe SEAL"}${supplierName ? ` - ${String(supplierName).replace(/[\r\n]/g, " ")}` : ""}`,
