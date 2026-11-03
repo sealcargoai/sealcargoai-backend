@@ -4,76 +4,8 @@
 // Servidor real; Resend simulado (test/fake-resend.mjs); búsqueda ficticia (test/fixtures). Nada sale.
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { server } from "./fixtures/qa-server.mjs";
 
-function server(portBase, env) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "seal-qa-"));
-  const MAIL_LOG = path.join(dir, "mails.jsonl");
-  const s = { BASE: "", proc: null, logs: "" };
-  const once = (PORT) =>
-    new Promise((resolve, reject) => {
-      const p = spawn(process.execPath, ["--import", path.resolve("test/fixtures/stub-register.mjs"), "--import", path.resolve("test/fake-resend.mjs"), "src/index.js"], {
-        env: {
-          ...process.env,
-          PORT: String(PORT),
-          DATA_DIR: dir,
-          MAIL_LOG,
-          RESEND_API_KEY: "re_test",
-          LEADS_EMAIL: "ventas@example.test",
-          LEADS_CC: "",
-          QA_NOTIFY_EMAILS: "qa-dev@example.test",
-          QA_EMAILS: "qa1@prueba.test",
-          QA_LEADS_EMAIL: "",
-          ADMIN_EMAIL: "",
-          ADMIN2_EMAIL: "",
-          DEV_COPIES_REAL_LEADS: "",
-          PUBLIC_API_URL: "",
-          GROQ_API_KEY: "",
-          EMAIL_DRY_RUN: "",
-          ...env,
-        },
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      p.stdout.on("data", (d) => {
-        s.logs += d;
-        if (String(d).includes("running at")) {
-          p.removeAllListeners("exit");
-          resolve(p);
-        }
-      });
-      p.stderr.on("data", (d) => (s.logs += d));
-      p.on("exit", (c) => reject(new Error(`server exited ${c}`)));
-    });
-  s.start = async () => {
-    let last;
-    for (let i = 0; i < 6; i++) {
-      const PORT = portBase + Math.floor(Math.random() * 180);
-      try {
-        s.proc = await once(PORT);
-        s.BASE = `http://127.0.0.1:${PORT}`;
-        await new Promise((r) => setTimeout(r, 200));
-        return;
-      } catch (e) {
-        last = e;
-      }
-    }
-    throw last;
-  };
-  s.stop = async () => {
-    await new Promise((r) => {
-      s.proc.removeAllListeners("exit");
-      s.proc.on("exit", r);
-      s.proc.kill("SIGTERM");
-    });
-    fs.rmSync(dir, { recursive: true, force: true });
-  };
-  s.mails = () => (fs.existsSync(MAIL_LOG) ? fs.readFileSync(MAIL_LOG, "utf8").trim().split("\n").filter(Boolean).map((l) => JSON.parse(l)) : []);
-  s.post = (p, body, ip) => fetch(s.BASE + p, { method: "POST", headers: { "content-type": "application/json", "x-real-ip": ip }, body: JSON.stringify(body) });
-  return s;
-}
 const OK = server(5100, { QA_LEADS_EMAIL: "qa-inbox@example.test" });
 const MISSING = server(5300, {});
 before(async () => {
@@ -122,7 +54,11 @@ test("cuenta QA permitida (en cualquier mayúscula o con +etiqueta) con buzón Q
   await wait(300);
   const q = await (await OK.post("/api/email/quote", { name: "Ana", email: "qa1@prueba.test", product: "Sillas plásticas" }, "10.1.0.3")).json();
   assert.equal(q.test, true);
-  const r = await OK.post("/api/email/report", { recipientEmail: "otra.persona@empresa.gt", requesterEmail: "qa1@prueba.test", reportToken: s.reportToken, totalCostText: "Q1,000.00", lang: "es" }, "10.1.0.3");
+  // 02-11e: a QA account can't send its report to an outside address (it used to go there with QA in BCC)
+  const ext = await OK.post("/api/email/report", { recipientEmail: "otra.persona@empresa.gt", requesterEmail: "qa1@prueba.test", reportToken: s.reportToken, totalCostText: "Q1,000.00", lang: "es" }, "10.1.0.3");
+  assert.equal(ext.status, 403);
+  assert.deepEqual(await ext.json(), { error: "qa_recipient_not_allowed" });
+  const r = await OK.post("/api/email/report", { recipientEmail: "qa1@prueba.test", requesterEmail: "qa1@prueba.test", reportToken: s.reportToken, totalCostText: "Q1,000.00", lang: "es" }, "10.1.0.3");
   assert.equal(r.status, 200);
   const m = OK.mails().slice(n);
   assert.equal(m.length, 4);
@@ -131,7 +67,7 @@ test("cuenta QA permitida (en cualquier mayúscula o con +etiqueta) con buzón Q
   assert.match(m[2].subject, new RegExp(`^\\[PRUEBA\\] Caso ${q.id}`));
   for (const x of m.slice(0, 3)) assert.deepEqual(x.to, QA_TO);
   assert.match(m[3].subject, /^Su informe SEAL/);
-  assert.equal(m[3].to, "otra.persona@empresa.gt");
+  assert.equal(m[3].to, "qa1@prueba.test");
   assert.deepEqual(m[3].bcc, QA_TO);
   for (const x of m) assert.ok(![].concat(x.to, x.bcc || []).some((a) => /ventas@/.test(a)), "nunca a ventas");
 });
@@ -151,7 +87,7 @@ test("buzón QA ausente: la prueba no se envía a nadie y se rechaza (503); lo r
   const s = await search(MISSING, "qa1@prueba.test", "10.2.0.1", "sillas plásticas apilables para eventos");
   assert.equal(s.status, 200);
   const tok = (await s.json()).reportToken;
-  assert.equal((await MISSING.post("/api/email/report", { recipientEmail: "x@empresa.gt", requesterEmail: "qa1@prueba.test", reportToken: tok, lang: "es" }, "10.2.0.1")).status, 503);
+  assert.equal((await MISSING.post("/api/email/report", { recipientEmail: "qa1@prueba.test", requesterEmail: "qa1@prueba.test", reportToken: tok, lang: "es" }, "10.2.0.1")).status, 503);
   await wait(300);
   assert.equal(MISSING.mails().length, n, "ningún correo de prueba salió");
   assert.match(MISSING.logs, /QA_ROUTING_UNAVAILABLE/);
