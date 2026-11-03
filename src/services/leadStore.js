@@ -73,14 +73,20 @@ export function registerLead(input, now = Date.now()) {
       if (JSON.stringify(existing.case[k]) !== JSON.stringify(v)) changes.push(k);
       existing.case[k] = v;
     }
+    // 02-11j: the contact of an existing case is never replaced by a later request (anyone who knows
+    // the client's email and product could otherwise swap the phone/company SEAL calls): empty fields
+    // are completed; different values are kept aside, marked, for SEAL to confirm with the client
+    // (review: also a field that was EMPTY is not filled — the first sender may simply not have given a
+    // phone, and a repeat from anyone would then set the phone SEAL calls)
+    const proposed = {};
     for (const [k, v] of Object.entries(input.contact)) {
-      if (!v) continue;
-      if (k !== "email" && existing.contact[k] !== v) changes.push(k);
-      existing.contact[k] = v;
+      if (!v || k === "email") continue;
+      if (existing.contact[k] !== v) proposed[k] = v;
     }
-    existing.history.push({ at: now, action: changes.length ? "actualizada" : "repetida", source: input.source, requestType: input.requestType, changes });
+    if (Object.keys(proposed).length) changes.push("contacto_distinto");
+    existing.history.push({ at: now, action: changes.length ? "actualizada" : "repetida", source: input.source, requestType: input.requestType, changes, ...(Object.keys(proposed).length ? { proposedContact: proposed } : {}) });
     scheduleSave();
-    return { lead: existing, duplicate: true, changes };
+    return { lead: existing, duplicate: true, changes, contactPending: Object.keys(proposed).length > 0 };
   }
   const lead = {
     id: newId(now),

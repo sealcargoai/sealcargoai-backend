@@ -59,7 +59,7 @@ function parseCsv(text) {
   return rows;
 }
 
-function parseValue(key, raw) {
+export function parseValue(key, raw) {
   if (key === "transitDays") return String(raw);
   let str = String(raw).replace(/[$,\s]/g, "");
   const isPct = str.endsWith("%");
@@ -70,6 +70,11 @@ function parseValue(key, raw) {
   // a rate above 100% or a negative amount is a typo in the sheet: keep the default
   if (PERCENT_KEYS.has(key) && !(n >= 0 && n <= 1)) return undefined;
   if (!PERCENT_KEYS.has(key) && n < 0) return undefined;
+  // 02-11j: values that would break or distort every estimate keep the default: an exchange rate of
+  // 0 (division by zero → «QNaN») or out of a plausible GTQ/USD range («7,80» read as 780), and a
+  // container of 0 m³ (division by zero)
+  if (key === "exchangeRate" && !(n >= 1 && n <= 50)) return undefined;
+  if (/Cbm$/.test(key) && key !== "lclMinCbm" && !(n > 0)) return undefined;
   return n;
 }
 

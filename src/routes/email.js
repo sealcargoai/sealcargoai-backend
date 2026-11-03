@@ -125,7 +125,7 @@ router.post("/quote", async (req, res) => {
     if (invalid) return res.status(400).json({ error: invalid });
     if (!caseData.totalCostText && Number(b.totalCost) > 0) caseData.totalCostText = `US$${Math.round(Number(b.totalCost)).toLocaleString("en-US")}`;
     for (const k of Object.keys(caseData)) if (caseData[k] === "") delete caseData[k];
-    const { lead, duplicate, changes } = registerLead({
+    const { lead, duplicate, changes, contactPending } = registerLead({
       contact,
       case: caseData,
       source: clean(b.source, 40),
@@ -153,7 +153,11 @@ router.post("/quote", async (req, res) => {
     }
     // the client can see what SEAL received and the case status (signed link)
     // test: the site doesn't count it as a commercial lead (analytics)
-    res.json({ success: true, id: lead.id, duplicate, notified: notified !== false, test: !!lead.test, caseUrl: caseLink(lead, baseUrl(req)) });
+    // 02-11j: the signed case link is given only when the case is created. A repeat (same email,
+    // product and supplier) can come from anyone who knows those three: it must not hand out the
+    // existing case (chat, budget, prices). The client already received the link the first time.
+    // contactPending: different contact data came with a repeat and was NOT applied (the client is told)
+    res.json({ success: true, id: lead.id, duplicate, notified: notified !== false, test: !!lead.test, ...(duplicate ? (contactPending ? { contactPending: true } : {}) : { caseUrl: caseLink(lead, baseUrl(req)) }) });
   } catch (err) {
     console.error("❌ /email/quote:", scrubEmails(err.message));
     res.status(500).json({ error: "Could not send email" });
@@ -207,7 +211,9 @@ router.post("/report", async (req, res) => {
     sentBy.get(byKey).push(Date.now());
     const result = await sendReportToUser({
       recipientEmail,
-      recipientName: clean(b.recipientName, 120),
+      // 02-11j: a name typed by the requester is used in the greeting only when the report goes to the
+      // requester's own mailbox; for anyone else it is free text in SEAL's name (a phishing vector)
+      recipientName: identityKey(recipientEmail) === identityKey(requester) ? clean(b.recipientName, 120) : "",
       requesterEmail: requester,
       pdfBuffer,
       // no links or addresses in what goes into the subject and body

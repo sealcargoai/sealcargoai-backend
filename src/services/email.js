@@ -275,6 +275,7 @@ const FIELD_LABEL = {
   price: "precio", priceSource: "origen del precio", publishedPrice: "precio publicado", totalCostText: "costo estimado", budget: "presupuesto",
   destination: "destino", message: "mensaje", caseRef: "informe", assumptions: "supuestos", warnings: "advertencias", chat: "conversación", earlier: "historial de producto",
   name: "nombre", phone: "teléfono", company: "empresa",
+  contacto_distinto: "datos de contacto distintos (NO aplicados: confirme con el cliente antes de usarlos)",
 };
 export function caseEmailHtml(lead, links, update = null) {
   const c = lead.case || {};
@@ -300,6 +301,14 @@ export function caseEmailHtml(lead, links, update = null) {
     `Caso ${lead.id}`,
     `
     ${update ? `<p style="margin:0 0 12px;padding:10px;background:#e0f2fe;border-radius:6px"><b>Actualización del mismo caso</b> (no es un caso nuevo): el cliente cambió ${e(update.map((k) => FIELD_LABEL[k] || k).join(", "))}. Abajo está el caso completo, ya actualizado.</p>` : ""}
+    ${(() => {
+      // 02-11j: a repeat with a different phone/company/name does not replace the contact: shown apart
+      // (review: from the latest history entry, so it also shows when the email is re-sent after a failure)
+      const p = lead.history?.[lead.history.length - 1]?.proposedContact;
+      return p
+        ? `<p style="margin:0 0 12px;padding:10px;background:#fef3c7;border-radius:6px"><b>Datos de contacto distintos recibidos en esta actualización (no se aplicaron):</b> ${e(Object.entries(p).map(([k, v]) => `${FIELD_LABEL[k] || k}: ${v}`).join(" · "))}. El contacto del caso sigue siendo el original; confirme con el cliente antes de usarlos.</p>`
+        : "";
+    })()}
     <h2 style="margin-top:0">📥 Solicitud recibida: ${e(requestLabel(lead.requestType))} — caso ${e(lead.id)}</h2>
     <p style="margin:0 0 8px;font-size:13px;color:#334155">${c.totalCostText ? "Incluye una <b>estimación preliminar</b> calculada por la herramienta; no es una cotización comercial de SEAL." : "Es una solicitud del cliente; no incluye cotización comercial."}</p>
     <p style="margin:0 0 12px;color:#64748b">Recibido ${e(fmtDate(lead.createdAt))} · desde: ${e(lead.source || "—")}${lead.intent ? ` · intención: ${e(lead.intent)}` : ""}${lead.lang === "en" ? " · cliente en inglés" : ""}</p>
@@ -311,7 +320,7 @@ export function caseEmailHtml(lead, links, update = null) {
       ${row("Producto", c.product)}${row("Descripción", c.description && c.description !== c.product ? c.description : "")}
       ${row("Cantidad", c.quantity)}${row("Proveedor", c.supplierName)}${row("Enlace del proveedor", c.supplierUrl)}
       ${c.priceSource === "usuario" ? `${row("Precio indicado por el usuario", c.price)}${row("Precio publicado", c.publishedPrice)}` : (c.publishedPrice && c.publishedPrice !== c.price ? `${row("Precio usado en la estimación", c.price)}${row("Precio publicado", c.publishedPrice)}` : row("Precio publicado", c.price))}${row(/sin flete/i.test(String(c.totalCostText || "")) ? "Costo estimado preliminar (sin flete)" : "Costo estimado preliminar", c.totalCostText)}${row("Presupuesto", c.budget)}
-      ${row("Destino", c.destination)}${row("Informe del cliente", c.caseRef)}
+      ${row("Destino", /^gt$/i.test(String(c.destination || "").trim()) ? "Guatemala" : c.destination)}${row("Informe del cliente", c.caseRef)}
     </table>
     ${c.message ? `<h3 style="margin:18px 0 6px;color:#0B3C5D">Mensaje del cliente</h3><p style="margin:0;white-space:pre-line">${e(c.message)}</p>` : ""}
     ${list("Supuestos usados en la estimación", c.assumptions, "#0369a1")}
@@ -423,7 +432,7 @@ export async function sendReportToUser({
     ${supplierName ? `<p>Supplier: ${e(supplierName)}</p>` : ""}
     <p>${partial ? "Preliminary estimated cost, without freight" : "Preliminary estimated cost"}: ${total}</p>
     ${other ? `<p>Sent at the request of: ${e(requesterEmail)}</p>` : ""}
-    <p style="color:#64748b;font-size:12px">This is a preliminary estimate based on information published by the platform; it is not a quote nor a verification of the supplier.</p>
+    <p style="color:#64748b;font-size:12px">This is a preliminary estimate based on information published by the platform; it is not a quote or a verification of the supplier.</p>
   `
     : `
     <h2>📄 Su informe de importación</h2>

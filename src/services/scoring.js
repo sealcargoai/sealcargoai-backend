@@ -25,11 +25,11 @@ export const TRUST_WEIGHTS = {
 };
 
 const LABELS = {
-  verification: "Verificación",
+  verification: "Insignias de la plataforma",
   track:        "Trayectoria",
   performance:  "Desempeño comercial",
   reputation:   "Reputación",
-  protection:   "Protección de pago",
+  protection:   "Protección de pedidos",
 };
 
 const clamp = (n, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, n));
