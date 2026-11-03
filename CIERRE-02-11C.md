@@ -176,3 +176,32 @@ Se ajustaron las pruebas anteriores que suponían que `+etiqueta` era QA: `qa-is
 **Limitaciones.**
 - Un tester que use `qa1+algo@` sin listarlo en `QA_EMAILS` se trata como cliente real: sus mensajes llegan a ventas, sin `[PRUEBA]`. Cada alias de prueba debe escribirse en `QA_EMAILS`.
 - Quien conozca una dirección QA puede buscar sin límite. Es un problema que ya existía y requiere verificar el correo.
+
+## 02-11j — auditoría integral (backend)
+
+Versión `2026.11.02-j`. Pruebas: `test/auditoria-02-11j.test.mjs` (7). Con el código anterior, 6 de 7 fallan; la del token de administración pasa también antes, porque `===` era funcionalmente correcto y el cambio solo endurece la comparación.
+
+| Sev. | Defecto | Corrección |
+|---|---|---|
+| Alta | Quien supiera el correo y el producto de un cliente recibía, con un envío «repetido», el enlace firmado de **su** caso (chat, presupuesto, precios) y reemplazaba su teléfono, empresa y nombre | Un repetido ya no recibe `caseUrl`: el cliente lo obtuvo al crear el caso. El contacto existente no se reemplaza; los campos vacíos se completan. Los datos distintos se guardan aparte (`proposedContact`) y el correo a SEAL los muestra marcados «no se aplicaron» |
+| Media | Un Host `*.up.railway.app` cualquiera (la app de cualquier cliente de Railway) ponía ese sitio en los enlaces de los correos de SEAL | Solo se acepta el host de producción de SEAL; otro host usa la URL de producción |
+| Media | Una hoja de tarifas con tipo de cambio 0 o «7,80» (leído como 780), o contenedor de 0 m³, rompía todas las estimaciones | `parseValue`: tipo de cambio entre 1 y 50; m³ de contenedor mayor que 0. Si no cumple, queda el valor por defecto |
+| Media | Informes a terceros: el «nombre del destinatario» libre del solicitante iba en el saludo de un correo con la marca de SEAL (vector de phishing) | El nombre solo se usa cuando el informe va al propio buzón del solicitante |
+| Media | La página del caso decía «Costo total estimado» para una estimación sin flete | «Costo estimado preliminar (sin flete)» |
+| Baja | El correo del caso mostraba «Destino GT» | «Guatemala» |
+| Baja | Los registros traían texto del cliente (consulta y material, con saltos de línea inyectables) | Se registran categoría, código o longitud |
+| Baja | El token de administración se comparaba con `===` | `timingSafeEqual` |
+| Baja | Criterio «Verificación» y «Protección de pago» | «Insignias de la plataforma» y «Protección de pedidos»; el inglés del correo de informe queda «not a quote or a verification» |
+
+**Pendiente, no verificable sin tocar producción:**
+- El límite por IP confía en `X-Real-IP`, como dice el comentario sobre el edge de Railway. No lo cambié: si el edge no lo envía, todos compartirían una IP y se bloquearía a los clientes.
+- `/api/events` acepta eventos anónimos, así que el embudo se puede inflar.
+- El remitente de informes no verifica que el solicitante sea dueño de su correo. El PDF lo genera el navegador, así que también podría ser uno arbitrario.
+- Las cuentas QA no tienen límite de búsquedas.
+
+**Revisión independiente (pasada 5), corregido:**
+- Un repetido tampoco rellena el teléfono o la empresa que el caso no tenía. Todo dato de contacto nuevo va aparte, y la respuesta trae `contactPending`.
+- El aviso a SEAL sale aunque el primer correo haya fallado.
+- El token de administración se compara como SHA-256: un token no ASCII del mismo largo daba 500 y revelaba el largo.
+- Un entorno de Railway que no es producción enlaza a sí mismo (`RAILWAY_PUBLIC_DOMAIN`).
+- Fuera de alcance, ya existía antes: en un repetido, los datos del caso (mensaje, cantidad, presupuesto) se siguen actualizando con lo que llegue. Es la función de actualizar el caso; cambiarlo requiere identificar al cliente.
