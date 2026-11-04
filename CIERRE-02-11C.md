@@ -547,3 +547,10 @@ El tiempo de resolución sigue una distribución geométrica con cola larga. El 
 - Pruebas: `test/verificacion-02-11q.test.mjs` (3; la prueba 2 falla si no se cuenta el rechazo — comprobado por mutación). Suite: 198/198.
 - Evidencia de producción (solo lectura, registros de Railway, 30 días): ~21 búsquedas con resultados y ningún «Search lead email failed», «case email failed» ni «/email/report» con error. Indica que Resend aceptó esos envíos (con un remitente de dominio no verificado Resend los rechazaría), pero no es observación de recepción.
 - Aparte: `❌ Unblocker attempt 1 failed: 401` en cada búsqueda — las credenciales OXY_UNBLOCK_USER/PASS de Oxylabs Web Unblocker son rechazadas; la búsqueda funciona por el respaldo (Web Scraper API). No se cambiaron variables.
+
+## 02-11r — Certificados TLS verificados aunque la variable diga lo contrario (2026-11-04)
+
+- Hallazgo (alto, confirmado en registros de Railway): producción arranca con `NODE_TLS_REJECT_UNAUTHORIZED=0` («makes TLS connections and HTTPS requests insecure»). Eso apagaba la verificación de certificados de todo el proceso: la clave de Resend, la de Groq y cada lead viajaban sin comprobar a quién.
+- Corrección (código, sin tocar variables): `src/tlsGuard.js` quita esa variable al arrancar, después de `.env` y antes de cualquier petición; el agente del Web Unblocker de Oxylabs conserva su excepción explícita. `ALLOW_INSECURE_TLS=1` volvería al comportamiento anterior. `/health.tls`: `verified` | `verified-override-ignored` | `insecure`.
+- Pruebas: `test/tls-02-11q.test.mjs` (3): un servidor local con certificado autofirmado es rechazado aun con la variable en 0; con la protección desactivada pasa (la prueba sí detecta el fallo); `/health` lo informa.
+- Pendiente para el dueño de Railway: borrar la variable `NODE_TLS_REJECT_UNAUTHORIZED` (ya no tiene efecto).
