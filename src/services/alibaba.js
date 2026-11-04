@@ -1,4 +1,5 @@
 import axios from "axios";
+import * as cheerio from "cheerio";
 import { HttpsProxyAgent } from "https-proxy-agent";
 
 // TLS stays verified for every service (Resend, Groq, Sheets…). Only the
@@ -29,7 +30,7 @@ const SEARCH_BUDGET_MS = parseInt(process.env.SEARCH_BUDGET_MS) || 75000;
 const UNBLOCK_PAUSE_MS = parseInt(process.env.UNBLOCK_PAUSE_MS) || 6 * 3600 * 1000;
 let unblockPausedUntil = 0;
 /** For /health: which route answered the last live search, and whether the Web Unblocker is in use. */
-export const searchRoute = { last: "", lastAt: null, unblocker: "unknown" };
+export const searchRoute = { last: "", lastAt: null, unblocker: "unknown", parser: "" };
 
 async function fetchAlibabaHtml(keyword, budgetMs = SEARCH_BUDGET_MS) {
   const url = buildAlibabaSearchUrl(keyword);
@@ -245,6 +246,93 @@ function extractOfferList(html) {
         console.error("❌ Hydration JSON parse failed:", e.message);
         return null;
     }
+}
+
+/* ─────────────────────────────────────────────
+   02-11u: Rendered result cards (Alibaba's newer search page)
+───────────────────────────────────────────── */
+// Production logs (2026-11-04): the Scraper API returns the page (≈1 MB, no captcha) but the hydration JSON
+// is gone ("Hydration marker not found"): the newer search page builds its cards in the browser. With
+// render:"html" those cards come in the HTML, so they are read from the markup when the JSON is missing.
+// Only what each card shows is read; a field the card doesn't show stays empty (never guessed). Class names
+// are hashed and change, so nothing depends on them: a card is the smallest block whose product links all
+// point to one product.
+// The platform's "Verified" mark is an image without text; this is its file (seen 2026-11-04) or any image
+// whose alt/title says "verified".
+const VERIFIED_IMG = /H62868c75e7eb4fbba8f8eb600d749c2aR|verified/i;
+export function extractOffersFromCards(html) {
+    if (!html || typeof html !== "string") return null;
+    let $;
+    try {
+        $ = cheerio.load(html);
+    } catch {
+        return null;
+    }
+    const groups = new Map();
+    $('a[href*="/product-detail/"]').each((_i, a) => {
+        const m = String($(a).attr("href") || "").match(/_(\d{6,})\.html/);
+        if (!m) return;
+        if (!groups.has(m[1])) groups.set(m[1], []);
+        groups.get(m[1]).push(a);
+    });
+    const offers = [];
+    for (const [productId, anchors] of groups) {
+        // climb while the parent holds no other product's links
+        let card = $(anchors[0]);
+        for (;;) {
+            const parent = card.parent();
+            if (!parent.length || parent.is("body, html")) break;
+            const other = parent.find('a[href*="/product-detail/"]').toArray().some((x) => !String($(x).attr("href") || "").includes(`_${productId}.html`));
+            if (other) break;
+            card = parent;
+        }
+        const text = (el) => $(el).text().replace(/\s+/g, " ").trim();
+        // text with a space between elements ("Ltd." / "6 yrs" / "CN" are separate blocks)
+        const spaced = (h) => cheerio.load(`<div>${String(h || "").replace(/></g, "> <")}</div>`).text().replace(/\s+/g, " ").trim();
+        const PRICE = /(?:US\s?\$|\$)\s?[\d,]+(?:\.\d+)?(?:\s*-\s*(?:US\s?\$|\$)?\s?[\d,]+(?:\.\d+)?)?/;
+        const MOQ = /(?:Min\.?\s*order|Pedido\s+m[ií]n(?:imo)?\.?)\s*:?\s*([\d,]+\s*[A-Za-zÀ-ÿ]+(?:\/[A-Za-z]+)?)/i;
+        // title: the longest product link text that is not the price / order / rating line
+        // 02-11v: only a link that STARTS with the price / order / rating / local price is that line; a title that
+        // merely mentions "$99" or "min order" is still the title (before, such a card was dropped entirely).
+        const isTitle = (t) => t.length > 12 && !/^(?:US\s?\$|\$)\s?\d/.test(t) && !/^(?:Min\.?\s*order|Pedido\s+m[ií]n)/i.test(t) && !/^\d(?:\.\d)?\s*\/\s*5/.test(t) && !/^(?:Q|GTQ)\s?[\d,]+/.test(t);
+        const titleAnchor = anchors.filter((a) => isTitle(text(a))).sort((a, b) => text(b).length - text(a).length)[0];
+        const title = titleAnchor ? text(titleAnchor) : "";
+        if (!title) continue;
+        // 02-11v: price, order, rating and reviews are read from the card WITHOUT the title ("2 years warranty",
+        // "5/5 star", "$99" in a title are not the supplier's data), and the years only from the supplier block.
+        $(titleAnchor).attr("data-sga-title", "1");
+        const rest$ = cheerio.load(`<div>${card.html() || ""}</div>`);
+        $(titleAnchor).removeAttr("data-sga-title");
+        rest$("[data-sga-title]").remove();
+        const all = spaced(rest$("div").first().html());
+        const supplierLinks = card.find('a[href*=".en.alibaba.com"]').toArray();
+        const supplierLink = supplierLinks.find((a) => text(a) && !/^\d+\s*(?:yrs?|years?|a[nñ]os?)\b/i.test(text(a)));
+        const yearsText = supplierLinks.filter((a) => a !== supplierLink).map((a) => spaced($(a).html())).join(" ");
+        const years = (yearsText.match(/(?:^|\s)(\d{1,2})\s*(?:yrs?|years?|a[nñ]os?)\b/i) || [])[1] || "";
+        const rm = all.match(/(?:^|\s)(\d(?:\.\d)?)\s*\/\s*5(?:\.0)?\b/);
+        const rating = rm && parseFloat(rm[1]) <= 5 ? rm[1] : "";
+        const reviews = rating ? (all.match(/\/\s*5(?:\.0)?\s*\((\d+)\)/) || [])[1] || "" : "";
+        const verified = card.find("img").toArray().some((i) => VERIFIED_IMG.test(`${$(i).attr("src") || ""} ${$(i).attr("alt") || ""} ${$(i).attr("title") || ""}`));
+        const img = card.find("img").toArray().map((i) => String($(i).attr("src") || "")).find((src) => /_\d+x\d+\.(?:jpe?g|png|webp)$|\.(?:jpe?g|webp)$/i.test(src)) || "";
+        const href = String($(anchors[0]).attr("href") || "");
+        offers.push({
+            productId,
+            title,
+            companyName: supplierLink ? text(supplierLink) : "",
+            // only US$ prices: a price in another currency (a localized page) is left out, never read as dollars
+            price: (all.match(PRICE) || [""])[0],
+            moq: (all.match(MOQ) || [])[1] ? `${(all.match(MOQ) || [])[1]}` : "",
+            goldSupplierYears: years ? `${years} yrs` : "",
+            reviewScore: rating,
+            reviewCount: reviews,
+            mainImage: img.replace(/^https?:/, ""),
+            productUrl: href.replace(/[?#].*$/, ""),
+            supplierHref: supplierLink ? String($(supplierLink).attr("href") || "").replace(/[?#].*$/, "") : "",
+            badges: verified ? [{ name: "Verified" }] : [],
+            certifications: [],
+        });
+    }
+    return offers.length ? { offerResultData: { offers } } : null;
 }
 
 /* ─────────────────────────────────────────────
@@ -471,9 +559,17 @@ async function searchAlibabaScraper({ keyword, relevanceKeyword, pageSize = 20, 
         return [];
     }
 
-    const offerList = extractOfferList(html);
+    // 02-11u: the hydration JSON first; the rendered cards when the page no longer has it
+    let offerList = extractOfferList(html);
+    if (offerList) searchRoute.parser = "hydration_json";
     if (!offerList) {
-        console.log("❌ Hydration extraction failed");
+        offerList = extractOffersFromCards(html);
+        if (offerList) searchRoute.parser = "result_cards";
+        if (offerList) console.log(`🧩 Read ${offerList.offerResultData.offers.length} offers from the rendered result cards (no hydration JSON)`);
+    }
+    if (!offerList) {
+        searchRoute.parser = "none"; // 02-11v: /health must not keep the reader of an earlier search
+        console.log("❌ Hydration extraction failed (and no result cards in the page)");
         return [];
     }
 
