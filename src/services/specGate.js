@@ -6,7 +6,7 @@
 // subset of the page's own comparison (frontend utils/differences.ts), so the server never drops a listing
 // the page would recommend.
 
-import { voltageCheck } from "./voltage.js";
+import { voltageCheck, requestedVolts, readVolts } from "./voltage.js";
 
 const NEG = String.raw`(?:no|ni|sin|excepto|salvo|not|nor|except|excluding|without)`;
 const low = (t) => ` ${String(t || "").toLowerCase()} `;
@@ -25,20 +25,6 @@ function latexIssue(desc, title) {
 }
 
 // ── voltage and phase ──────────────────────────────────────────────────────────
-const RANGE = /(\d{3})\s*(?:-|–|~|to|a)\s*(\d{3})\s*(?:v|volts?|voltios?|vac|vca)\b/g;
-const VOLTS = /(\d{2,3})(?:\s*(?:\/|\bo\b|\bu\b|\bor\b)\s*(\d{2,3}))*\s*(?:v|volts?|voltios?|vac|vca)\b/g;
-const NEG_VOLTS = new RegExp(String.raw`\b${NEG}\s+(?:[a-záéíóúüñ]+\s+){0,3}?(\d{2,3})\s*(?:v|volts?|voltios?|vac)\b`, "g");
-function electric(text) {
-  const ranges = [];
-  const rest = text.replace(RANGE, (_m, a, b) => {
-    const lo = Math.min(+a, +b);
-    const hi = Math.max(+a, +b);
-    if (lo >= 100 && hi <= 690) ranges.push([lo, hi]);
-    return " ";
-  });
-  const volts = [...new Set([...rest.matchAll(VOLTS)].flatMap((m) => m[0].match(/\d{2,3}/g).map(Number).filter((v) => v >= 100 && v <= 690)))];
-  return { volts, ranges };
-}
 const SINGLE = /\b(?:monof[aá]sic[oa]s?|single[\s-]*phase|1[\s-]*(?:phase|fase|ph)\b)/;
 const THREE = /\b(?:trif[aá]sic[oa]s?|three[\s-]*phase|3[\s-]*(?:phase|fases?|ph)\b)/;
 // 02-11t: the equipment's voltage only (a component's "control panel 220 V" is not the equipment's), with
@@ -164,13 +150,12 @@ export function constraintTerms(description) {
   NO_LATEX.lastIndex = 0;
   if (wantsNoLatex(description)) out.push("latex free");
   NO_LATEX.lastIndex = 0;
-  const ruled = [];
-  const dd = d.replace(NEG_VOLTS, (_m, v) => (ruled.push(+v), " "));
-  const e = electric(dd);
-  const vs = e.volts.filter((x) => !ruled.includes(x));
+  // 02-11w: any voltage (24 V, 12 V DC…), with the current type only when the client wrote it
+  const w = requestedVolts(description);
+  const cur = (c) => (c === "dc" ? " dc" : c === "ac" ? " ac" : "");
   // one voltage asked: it goes in the query; several («220 o 380 V») stay undecided (nothing added)
-  if (vs.length === 1 && !e.ranges.length) out.push(`${vs[0]}v`);
-  else if (!vs.length && e.ranges.length === 1) out.push(`${e.ranges[0][0]}-${e.ranges[0][1]}v`);
+  if (w.list.length === 1 && !w.ranges.length) out.push(`${w.list[0].v}v${cur(w.list[0].cur)}`);
+  else if (!w.list.length && w.ranges.length === 1) out.push(`${w.ranges[0].a}-${w.ranges[0].b}v${cur(w.ranges[0].cur)}`);
   const toe = toeWanted(description);
   if (toe) out.push(`${toe} toe`);
   return out;
@@ -183,20 +168,27 @@ export function constraintTerms(description) {
 // 02-11t: what the translation may add or change that the client never asked for. The ORIGINAL description
 // decides: a voltage, phase or toe-cap material in the keyword that the description doesn't ask for (or rules
 // out) is removed before the query is built ("220 V" translated as "industrial compressor 380v").
-const KW_VOLT = /\b\d{2,3}(?:\s*[\/-]\s*\d{2,3})*\s*(?:v|volts?|vac)\b/gi;
+const KW_VOLT = /(?:\b(?:ac|dc)\s*-?\s*)?(?<![\d.,])\d{1,4}(?:\.\d{1,2})?(?:\s*v?\s*[\/-]\s*\d{1,4}(?:\.\d{1,2})?)*\s*(?:v(?:olts?|ac|dc|ca|cc)?)(?:\s*-?\s*(?:ac|dc)(?![a-z]))?(?![a-z0-9])/gi;
+const KW_CUR = /\b(?:ac|dc)\b/gi;
 const KW_PHASE = /\b(?:single|one|1|three|3)[\s-]*(?:phase|ph)\b/gi;
 function sanitizeKeyword(keyword, description) {
   const d = low(description);
-  const ruled = [];
-  const dd = d.replace(NEG_VOLTS, (_m, v) => (ruled.push(+v), " "));
-  NEG_VOLTS.lastIndex = 0;
-  const e = electric(dd);
-  const wanted = e.volts.filter((x) => !ruled.includes(x));
-  const okVolt = (v) => wanted.includes(v) || e.ranges.some(([a, b]) => v >= a && v <= b);
+  // 02-11w: the same reading as the comparison (services/voltage.js): any voltage, AC/DC only when written
+  const w = requestedVolts(description);
+  const wantCur = [...w.list, ...w.ranges].map((x) => x.cur).find(Boolean) || "";
+  const okVolt = (v) => w.list.some((x) => x.v === v) || w.ranges.some((r) => v >= r.a && v <= r.b);
   let k = String(keyword || "").replace(KW_VOLT, (m) => {
-    const vs = (m.match(/\d{2,3}/g) || []).map(Number);
-    return vs.length && vs.every(okVolt) ? m : " ";
+    const e = readVolts(m);
+    const vs = [...e.list.map((x) => x.v), ...e.ranges.flatMap((r) => [r.a, r.b])];
+    if (!vs.length || !vs.every(okVolt)) return " ";
+    // a current type the client didn't write (or another one) is taken out of the figure
+    const c = e.list[0]?.cur || e.ranges[0]?.cur || "";
+    // the client wrote the type: the figure goes back with it (constraintTerms), never with another one
+    if (wantCur) return c === wantCur ? m : " ";
+    return c ? m.replace(/\b(?:ac|dc)\s*-?\s*|\s*-?\s*(?:ac|dc)$|(?<=v)(?:ac|dc|ca|cc)$/gi, "") : m;
   });
+  // a lone "AC"/"DC" word the client didn't ask for
+  k = k.replace(KW_CUR, (m) => (m.toLowerCase() === wantCur ? m : " "));
   const dSingle = SINGLE.test(d);
   const dThree = THREE.test(d);
   k = k.replace(KW_PHASE, (m) => {
@@ -216,6 +208,16 @@ export function constrainKeyword(keyword, description) {
   NO_LATEX.lastIndex = 0;
   const relevanceKeyword = k.replace(/\b(?:l[aá]tex[\s-]*free|non[\s-]*l[aá]tex)\b/gi, " ").replace(/\s+/g, " ").trim() || k;
   const kl = k.toLowerCase();
-  const add = constraintTerms(description).filter((term) => !kl.includes(term) && !(/^\d/.test(term) && kl.includes(term.replace(/v$/, ""))));
+  // a voltage already in the keyword (same figure and, when asked, same type) is not added twice
+  const kv = readVolts(kl);
+  const has = (term) => {
+    const t = readVolts(term);
+    if (!t.list.length && !t.ranges.length) return kl.includes(term);
+    const x = t.list[0];
+    if (x) return kv.list.some((y) => y.v === x.v && (!x.cur || y.cur === x.cur));
+    const r = t.ranges[0];
+    return kv.ranges.some((y) => y.a === r.a && y.b === r.b && (!r.cur || y.cur === r.cur));
+  };
+  const add = constraintTerms(description).filter((term) => !has(term));
   return { searchKeyword: add.length ? `${k} ${add.join(" ")}`.trim() : k, relevanceKeyword };
 }
