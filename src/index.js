@@ -100,7 +100,7 @@ export function storageStatus() {
   };
 }
 
-export const BACKEND_VERSION = "2026.11.04-t";
+export const BACKEND_VERSION = "2026.11.04-v";
 app.get("/health", (_req, res) => {
   res.json({
     status:          "ok",
