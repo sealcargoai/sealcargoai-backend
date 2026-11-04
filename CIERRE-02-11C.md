@@ -514,3 +514,28 @@ El riesgo de adivinar un código no cambia: la tabla de 02-11n sigue siendo vál
 - Ver 02-11n: los registros DNS públicos (DKIM, SPF y MX de `send.`, DMARC `p=none` del dominio principal) están presentes.
 - El panel de Resend no estaba disponible: no había sesión iniciada y no se inició ninguna. La clave de producción da `no_access`.
 - El estado «Verified» y la entrega real **siguen sin verificarse**. Solo se pueden confirmar en el panel, o con un envío de prueba controlado y autorizado.
+
+## 02-11p — verificación de lo publicado en 02-11o y desafío acotado en el navegador
+
+**Estado comprobado al empezar (04-11-2026):**
+- `main` del backend = `9c73576`, que es el merge del PR #15 `fix-02-11o`. Contiene `verifyStore.js` con cupo por red, desafío, reserva y renovación, más `test/verificacion-02-11o.test.mjs` y `test/fixtures/pow.mjs`.
+- Un clon limpio de `main` da `npm test` **193 de 193** y `node scripts/riesgo-codigos.mjs` funciona.
+- En la rama, el commit `294bf55` era un estado intermedio de la subida por la web de GitHub: solo traía el cierre y el script. Los commits siguientes (`f50dd66`, `c814134`, `1010de4`, `7c9f5a6` y `d017418`) agregaron el código y las pruebas antes del merge.
+- Producción `/health` antes de esta ronda: `2026.11.04-o`, commit `9c73576`.
+
+**Cambios del backend (solo pruebas):**
+- `test/riesgo-codigos.test.mjs` simula al atacante contra el almacén real, con los límites de producción. Mide cuántos pedidos caen en cada nivel de desafío y comprueba que las cifras del script coinciden: 360 códigos, 70 redes, 90 IP y 3.74·10⁷ hashes con 16 y 18 bits.
+- Otra prueba ejecuta el script como comando y comprueba que todos los parámetros vienen de `codeRiskParams()`.
+
+**Frontend (2026.11.04-p):** el desafío ahora muestra el progreso, se puede cancelar y se detiene a los 30 s. Cada salida tiene su mensaje en ES/EN.
+
+**Medición del desafío en Chromium headless** (`solveChallenge` real, 20 muestras por caso; la CPU lenta se simuló con `Emulation.setCPUThrottlingRate`):
+
+| CPU | Bits | Mediana | p90 | Máximo |
+|---|---|---|---|---|
+| Normal | 16 | 119 ms | 492 ms | 801 ms |
+| Normal | 18 | 363 ms | 1.5 s | 2.3 s |
+| 6 veces más lenta (aprox. móvil de gama baja) | 16 | 0.9 s | 2.0 s | 3.8 s |
+| 6 veces más lenta | 18 | 1.7 s | 8.0 s | 8.2 s |
+
+El tiempo de resolución sigue una distribución geométrica con cola larga. El límite de 30 s queda a varias veces la mediana del peor caso medido. Si se alcanza, no se pide ningún código y se explica qué hacer.
