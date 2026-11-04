@@ -7,7 +7,7 @@ import { isQa, isQaMailbox, emailKey, mailboxAddress } from "./quotaStore.js";
 //         Resend only lets deliver to the account owner) | "invalid"
 // domain: the status Resend reports for the sender's domain via GET /domains (no email is sent):
 //         "verified" | "pending" | "failed" | "temporary_failure" | "not_started" | "not_found" |
-//         "no_access" (the API key cannot read domains, e.g. a sending-only key) | "unknown"
+//         "not_checkable_with_key" (02-11q: the API key cannot read domains, e.g. a sending-only key; says nothing about the domain or delivery) | "unknown"
 const fromDomain = () => (String(FROM_EMAIL).match(/@([^\s>]+)>?\s*$/)?.[1] || "").toLowerCase();
 let senderCheck = { domain: "unknown", at: 0 };
 export function senderStatus() {
@@ -20,7 +20,7 @@ export async function checkSenderDomain() {
   try {
     const ctl = AbortSignal.timeout(6000);
     const res = await fetch("https://api.resend.com/domains", { headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}` }, signal: ctl });
-    if (res.status === 401 || res.status === 403) senderCheck = { domain: "no_access", at: Date.now() };
+    if (res.status === 401 || res.status === 403) senderCheck = { domain: "not_checkable_with_key", at: Date.now() };
     else if (!res.ok) senderCheck = { domain: "unknown", at: Date.now() };
     else {
       const list = (await res.json())?.data || [];
@@ -51,6 +51,49 @@ const dryClient = {
     get: async () => ({ data: { last_event: "dry_run" }, error: null }),
   },
 };
+// ── 02-11q: what Resend answered to the real sends since this process started, for /health ──
+// Counts and times only: never an address, subject, id or the error text (it can carry addresses).
+// «accepted» means Resend took the email for delivery; it is NOT proof it reached an inbox.
+const sendStats = { since: new Date().toISOString(), accepted: 0, refused: 0, lastAcceptedAt: null, lastRefusedAt: null, lastRefusal: null };
+const refusalKind = (err) => {
+  const name = String(err?.name || "");
+  if (/^[a-z_]{3,40}$/.test(name) && name !== "application_error") return name;
+  const m = String(err?.message || "");
+  if (/domain.*not verified|verify a domain/i.test(m)) return "domain_not_verified";
+  if (/api key|unauthori|forbidden/i.test(m)) return "api_key";
+  if (/rate limit|too many/i.test(m)) return "rate_limit";
+  if (/timeout|ETIMEDOUT|ECONNRE|ENOTFOUND|fetch failed/i.test(m)) return "network";
+  return "other";
+};
+function refused(err) {
+  sendStats.refused++;
+  sendStats.lastRefusedAt = new Date().toISOString();
+  sendStats.lastRefusal = refusalKind(err);
+}
+export function emailSendStats() {
+  return { ...sendStats };
+}
+function tracked(client) {
+  return {
+    emails: {
+      get: (...a) => client.emails.get(...a),
+      send: async (msg) => {
+        try {
+          const r = await client.emails.send(msg);
+          if (r?.error) refused(r.error);
+          else {
+            sendStats.accepted++;
+            sendStats.lastAcceptedAt = new Date().toISOString();
+          }
+          return r;
+        } catch (err) {
+          refused(err);
+          throw err;
+        }
+      },
+    },
+  };
+}
 function getResendClient() {
   if (emailDryRun()) return dryClient;
   const apiKey = process.env.RESEND_API_KEY;
@@ -59,7 +102,7 @@ function getResendClient() {
     throw new Error("RESEND_API_KEY is not defined in environment");
   }
 
-  return new Resend(apiKey);
+  return tracked(new Resend(apiKey));
 }
 
 // ── Who receives what ─────────────────────────────────────────────────────────

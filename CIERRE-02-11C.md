@@ -539,3 +539,11 @@ El riesgo de adivinar un código no cambia: la tabla de 02-11n sigue siendo vál
 | 6 veces más lenta | 18 | 1.7 s | 8.0 s | 8.2 s |
 
 El tiempo de resolución sigue una distribución geométrica con cola larga. El límite de 30 s queda a varias veces la mediana del peor caso medido. Si se alcanza, no se pide ningún código y se explica qué hacer.
+
+## 02-11q — Estado de envíos observable sin enviar nada (2026-11-04)
+
+- `/health.emailSends`: desde el último arranque, cuántos envíos reales aceptó o rechazó Resend, hora del último de cada uno y el tipo del último rechazo (`validation_error`, `domain_not_verified`, `api_key`, `rate_limit`, `network`, `other`). Solo conteos y horas: ninguna dirección, asunto, id ni texto del error. «Aceptado» = Resend tomó el correo; **no** prueba que llegó al buzón. En `EMAIL_DRY_RUN` no cuenta nada.
+- `/health.emailSender.domain`: `no_access` pasa a `not_checkable_with_key` — la clave (solo envío) no puede leer dominios; no dice nada del dominio ni de la entrega.
+- Pruebas: `test/verificacion-02-11q.test.mjs` (3; la prueba 2 falla si no se cuenta el rechazo — comprobado por mutación). Suite: 198/198.
+- Evidencia de producción (solo lectura, registros de Railway, 30 días): ~21 búsquedas con resultados y ningún «Search lead email failed», «case email failed» ni «/email/report» con error. Indica que Resend aceptó esos envíos (con un remitente de dominio no verificado Resend los rechazaría), pero no es observación de recepción.
+- Aparte: `❌ Unblocker attempt 1 failed: 401` en cada búsqueda — las credenciales OXY_UNBLOCK_USER/PASS de Oxylabs Web Unblocker son rechazadas; la búsqueda funciona por el respaldo (Web Scraper API). No se cambiaron variables.

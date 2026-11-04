@@ -9,7 +9,7 @@ import aiRouter from "./routes/ai.js";
 import emailRoutes from "./routes/email.js";
 import ratesRouter from "./routes/rates.js";
 import leadsRouter, { learnBase } from "./routes/leads.js";
-import { recipientConfig, emailDryRun, qaRouting, senderStatus, checkSenderDomain } from "./services/email.js";
+import { recipientConfig, emailDryRun, qaRouting, senderStatus, checkSenderDomain, emailSendStats } from "./services/email.js";
 import { corsOrigin, rateLimit } from "./middleware/security.js";
 import { isQa, flushQuota } from "./services/quotaStore.js";
 import { sessionVerifies, verifyStoreStatus } from "./services/verifyStore.js";
@@ -97,7 +97,7 @@ export function storageStatus() {
   };
 }
 
-export const BACKEND_VERSION = "2026.11.04-o";
+export const BACKEND_VERSION = "2026.11.04-q";
 app.get("/health", (_req, res) => {
   res.json({
     status:          "ok",
@@ -112,6 +112,7 @@ app.get("/health", (_req, res) => {
     verifyStore:     verifyStoreStatus(),
     // 02-11l: sender configuration and its domain status at Resend (read-only check, statuses only)
     emailSender:     senderStatus(),
+    emailSends:      emailSendStats(),
     // 02-11m: whether the data folders are on the volume Railway attached (status only, never paths/secrets)
     storage:         storageStatus(),
     timestamp:       new Date().toISOString(),

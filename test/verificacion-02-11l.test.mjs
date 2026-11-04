@@ -207,7 +207,7 @@ test("11 · remitente: /health informa el estado del dominio en Resend (solo lec
     // only the parent domain verified: the sending subdomain is NOT reported as verified
     [{ RESEND_FROM: "SEAL <avisos@mail.seal-ficticio.test>", FAKE_DOMAINS: JSON.stringify([{ name: "seal-ficticio.test", status: "verified" }]) }, { from: "custom", domain: "not_found" }],
     [{ RESEND_FROM: "SEAL <avisos@otro-ficticio.test>", FAKE_DOMAINS: "[]" }, { from: "custom", domain: "not_found" }],
-    [{ RESEND_FROM: "SEAL <avisos@seal-ficticio.test>", FAKE_DOMAINS_DENIED: "1" }, { from: "custom", domain: "no_access" }],
+    [{ RESEND_FROM: "SEAL <avisos@seal-ficticio.test>", FAKE_DOMAINS_DENIED: "1" }, { from: "custom", domain: "not_checkable_with_key" }],
     [{ RESEND_FROM: "" }, { from: "resend-test-sender", domain: "unknown" }],
   ];
   for (const [env, want] of cases) {
