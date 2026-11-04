@@ -1,202 +1,625 @@
 [
- {
-  "d": "compresor industrial de tornillo de 220 V",
-  "t": "Industrial screw compressor 380 V, control panel 220 V",
-  "expect": "incompatible",
-  "es": "Esta publicación indica 380 V para el equipo (220 V es de un componente); solicitaste 220 V",
-  "en": "This listing states 380 V for the equipment (220 V is for a component); you asked for 220 V",
-  "sameWords": true
- },
- {
-  "d": "compresor industrial de tornillo de 220 V",
-  "t": "Industrial screw air compressor 380V, 220V control voltage",
-  "expect": "incompatible",
-  "es": "Esta publicación indica 380 V para el equipo (220 V es de un componente); solicitaste 220 V",
-  "en": "This listing states 380 V for the equipment (220 V is for a component); you asked for 220 V",
-  "sameWords": true
- },
- {
-  "d": "compresor industrial de tornillo de 220 V",
-  "t": "Screw compressor 380v 3 phase, cooling fan 220v",
-  "expect": "incompatible",
-  "es": "Esta publicación indica 380 V para el equipo (220 V es de un componente); solicitaste 220 V",
-  "en": "This listing states 380 V for the equipment (220 V is for a component); you asked for 220 V",
-  "sameWords": true
- },
- {
-  "d": "compresor industrial de tornillo de 220 V",
-  "t": "Industrial screw compressor 380V",
-  "expect": "incompatible",
-  "es": "Esta publicación indica 380 V; solicitaste 220 V",
-  "en": "This listing states 380 V; you asked for 220 V",
-  "sameWords": true
- },
- {
-  "d": "compresor industrial de tornillo de 220 V",
-  "t": "Industrial screw compressor 220V/380V",
-  "expect": "confirm",
-  "es": "Confirma que te coticen la variante de 220 V (el título ofrece 220 V / 380 V)",
-  "en": "Confirm they quote the 220 V variant (the title offers 220 V / 380 V)",
-  "sameWords": true
- },
- {
-  "d": "compresor industrial de tornillo de 220 V",
-  "t": "Industrial screw compressor 220V or 380V optional",
-  "expect": "confirm",
-  "es": "Confirma que te coticen la variante de 220 V (el título ofrece 220 V / 380 V)",
-  "en": "Confirm they quote the 220 V variant (the title offers 220 V / 380 V)",
-  "sameWords": true
- },
- {
-  "d": "compresor industrial de tornillo de 220 V",
-  "t": "Screw air compressor 220-380V",
-  "expect": "confirm",
-  "es": "Confirma que te coticen la variante de 220 V (el título ofrece 220-380 V)",
-  "en": "Confirm they quote the 220 V variant (the title offers 220-380 V)",
-  "sameWords": true
- },
- {
-  "d": "compresor industrial de tornillo de 220 V",
-  "t": "Screw compressor 220V 380V",
-  "expect": "confirm",
-  "es": "Voltaje del equipo por confirmar: el título indica 220 V / 380 V sin decir a qué corresponde cada cifra; pediste 220 V",
-  "en": "Equipment voltage to confirm: the title states 220 V / 380 V without saying what each figure refers to; you asked for 220 V",
-  "sameWords": true
- },
- {
-  "d": "compresor industrial de tornillo de 220 V",
-  "t": "Industrial screw compressor, control panel 220V",
-  "expect": "confirm",
-  "es": "Voltaje del equipo por confirmar (el título indica 220 V solo para un componente, no para el equipo); pediste 220 V",
-  "en": "Equipment voltage to confirm (the title states 220 V only for a component, not for the equipment); you asked for 220 V",
-  "sameWords": true
- },
- {
-  "d": "compresor industrial de tornillo de 220 V",
-  "t": "Industrial screw compressor 7.5kW 50Hz",
-  "expect": "confirm",
-  "es": "Voltaje del equipo por confirmar; pediste 220 V",
-  "en": "Equipment voltage to confirm; you asked for 220 V",
-  "sameWords": true
- },
- {
-  "d": "compresor industrial de tornillo de 220 V",
-  "t": "Industrial screw compressor 15kW 220W lamp",
-  "expect": "confirm",
-  "es": "Voltaje del equipo por confirmar; pediste 220 V",
-  "en": "Equipment voltage to confirm; you asked for 220 V",
-  "sameWords": true
- },
- {
-  "d": "compresor industrial de tornillo de 220 V",
-  "t": "Industrial screw compressor 220V 60Hz",
-  "expect": "match",
-  "es": null,
-  "en": null,
-  "sameWords": true
- },
- {
-  "d": "compresor industrial de tornillo de 220 V",
-  "t": "Screw air compressor 220-240V 60Hz",
-  "expect": "match",
-  "es": null,
-  "en": null,
-  "sameWords": true
- },
- {
-  "d": "industrial screw compressor 220V",
-  "t": "Industrial screw compressor 380 V, control panel 220 V",
-  "expect": "incompatible",
-  "es": "Esta publicación indica 380 V para el equipo (220 V es de un componente); solicitaste 220 V",
-  "en": "This listing states 380 V for the equipment (220 V is for a component); you asked for 220 V",
-  "sameWords": true
- },
- {
-  "d": "industrial screw compressor 220V",
-  "t": "Industrial screw compressor 220V/380V",
-  "expect": "confirm",
-  "es": "Confirma que te coticen la variante de 220 V (el título ofrece 220 V / 380 V)",
-  "en": "Confirm they quote the 220 V variant (the title offers 220 V / 380 V)",
-  "sameWords": true
- },
- {
-  "d": "industrial screw compressor 220V",
-  "t": "Industrial screw compressor 220V",
-  "expect": "match",
-  "es": null,
-  "en": null,
-  "sameWords": true
- },
- {
-  "d": "compresor de tornillo, no 380 V",
-  "t": "Screw compressor 380V",
-  "expect": "incompatible",
-  "es": "Esta publicación indica 380 V, que excluiste",
-  "en": "This listing states 380 V, which you ruled out",
-  "sameWords": true
- },
- {
-  "d": "compresor de tornillo 220 o 380 V",
-  "t": "Screw compressor 380V",
-  "expect": "confirm",
-  "es": "Indica 380 V; mencionaste 220 V / 380 V: confirma qué voltaje necesitas",
-  "en": "States 380 V; you mentioned 220 V / 380 V: confirm which voltage you need",
-  "sameWords": true
- },
- {
-  "d": "Guantes desechables sin látex",
-  "t": "Latex disposable gloves",
-  "expect": "incompatible",
-  "es": "La publicación indica látex, un material que excluiste",
-  "en": "The listing states latex, a material you ruled out",
-  "sameWords": true
- },
- {
-  "d": "Guantes desechables sin látex",
-  "t": "Disposable nitrile gloves latex free",
-  "expect": "match",
-  "es": null,
-  "en": null,
-  "sameWords": true
- },
- {
-  "d": "Guantes desechables sin látex",
-  "t": "Disposable gloves",
-  "expect": "confirm",
-  "es": "La publicación no indica si contiene látex (lo excluiste); confírmalo con el proveedor.",
-  "en": "The listing does not state whether it contains latex (you ruled it out); confirm it with the supplier.",
-  "sameWords": true
- },
- {
-  "d": "Botas con puntera compuesta",
-  "t": "Steel toe safety boots",
-  "expect": "incompatible",
-  "es": "Indica puntera de acero; pediste puntera de material compuesto",
-  "en": "States a steel toe cap; you asked for composite",
-  "sameWords": true
- },
- {
-  "d": "Botas con puntera compuesta",
-  "t": "Composite toe safety boots",
-  "expect": "match",
-  "es": null,
-  "en": null,
-  "sameWords": true
- },
- {
-  "d": "Botas con puntera compuesta",
-  "t": "Safety boots",
-  "expect": "confirm",
-  "es": "La publicación no indica de qué es la puntera (pediste material compuesto); confírmalo con el proveedor.",
-  "en": "The listing does not state what the toe cap is made of (you asked for composite); confirm it with the supplier.",
-  "sameWords": true
- },
- {
-  "d": "Botas con puntera compuesta",
-  "t": "Composite toe cap for safety shoes",
-  "expect": "incompatible",
-  "es": "Parece un repuesto o accesorio, no el producto completo",
-  "en": "Looks like a spare part or accessory, not the complete product",
-  "sameWords": false
- }
+  {
+    "d": "compresor industrial de tornillo de 220 V",
+    "t": "Industrial screw compressor 380 V, control panel 220 V",
+    "expect": "incompatible",
+    "es": "Esta publicación indica 380 V para el equipo (220 V es de un componente); solicitaste 220 V",
+    "en": "This listing states 380 V for the equipment (220 V is for a component); you asked for 220 V",
+    "sameWords": true
+  },
+  {
+    "d": "compresor industrial de tornillo de 220 V",
+    "t": "Industrial screw air compressor 380V, 220V control voltage",
+    "expect": "incompatible",
+    "es": "Esta publicación indica 380 V para el equipo (220 V es de un componente); solicitaste 220 V",
+    "en": "This listing states 380 V for the equipment (220 V is for a component); you asked for 220 V",
+    "sameWords": true
+  },
+  {
+    "d": "compresor industrial de tornillo de 220 V",
+    "t": "Screw compressor 380v 3 phase, cooling fan 220v",
+    "expect": "incompatible",
+    "es": "Esta publicación indica 380 V para el equipo (220 V es de un componente); solicitaste 220 V",
+    "en": "This listing states 380 V for the equipment (220 V is for a component); you asked for 220 V",
+    "sameWords": true
+  },
+  {
+    "d": "compresor industrial de tornillo de 220 V",
+    "t": "Industrial screw compressor 380V",
+    "expect": "incompatible",
+    "es": "Esta publicación indica 380 V; solicitaste 220 V",
+    "en": "This listing states 380 V; you asked for 220 V",
+    "sameWords": true
+  },
+  {
+    "d": "compresor industrial de tornillo de 220 V",
+    "t": "Industrial screw compressor 220V/380V",
+    "expect": "confirm",
+    "es": "Confirma que te coticen la variante de 220 V (el título ofrece 220 V / 380 V)",
+    "en": "Confirm they quote the 220 V variant (the title offers 220 V / 380 V)",
+    "sameWords": true
+  },
+  {
+    "d": "compresor industrial de tornillo de 220 V",
+    "t": "Industrial screw compressor 220V or 380V optional",
+    "expect": "confirm",
+    "es": "Confirma que te coticen la variante de 220 V (el título ofrece 220 V / 380 V)",
+    "en": "Confirm they quote the 220 V variant (the title offers 220 V / 380 V)",
+    "sameWords": true
+  },
+  {
+    "d": "compresor industrial de tornillo de 220 V",
+    "t": "Screw air compressor 220-380V",
+    "expect": "confirm",
+    "es": "Confirma que te coticen la variante de 220 V (el título ofrece 220-380 V)",
+    "en": "Confirm they quote the 220 V variant (the title offers 220-380 V)",
+    "sameWords": true
+  },
+  {
+    "d": "compresor industrial de tornillo de 220 V",
+    "t": "Screw compressor 220V 380V",
+    "expect": "confirm",
+    "es": "Voltaje del equipo por confirmar: el título indica 220 V / 380 V sin decir a qué corresponde cada cifra; pediste 220 V",
+    "en": "Equipment voltage to confirm: the title states 220 V / 380 V without saying what each figure refers to; you asked for 220 V",
+    "sameWords": true
+  },
+  {
+    "d": "compresor industrial de tornillo de 220 V",
+    "t": "Industrial screw compressor, control panel 220V",
+    "expect": "confirm",
+    "es": "Voltaje del equipo por confirmar (el título indica 220 V solo para un componente, no para el equipo); pediste 220 V",
+    "en": "Equipment voltage to confirm (the title states 220 V only for a component, not for the equipment); you asked for 220 V",
+    "sameWords": true
+  },
+  {
+    "d": "compresor industrial de tornillo de 220 V",
+    "t": "Industrial screw compressor 7.5kW 50Hz",
+    "expect": "confirm",
+    "es": "Voltaje del equipo por confirmar; pediste 220 V",
+    "en": "Equipment voltage to confirm; you asked for 220 V",
+    "sameWords": true
+  },
+  {
+    "d": "compresor industrial de tornillo de 220 V",
+    "t": "Industrial screw compressor 15kW 220W lamp",
+    "expect": "confirm",
+    "es": "Voltaje del equipo por confirmar; pediste 220 V",
+    "en": "Equipment voltage to confirm; you asked for 220 V",
+    "sameWords": true
+  },
+  {
+    "d": "compresor industrial de tornillo de 220 V",
+    "t": "Industrial screw compressor 220V 60Hz",
+    "expect": "match",
+    "es": null,
+    "en": null,
+    "sameWords": true
+  },
+  {
+    "d": "compresor industrial de tornillo de 220 V",
+    "t": "Screw air compressor 220-240V 60Hz",
+    "expect": "match",
+    "es": null,
+    "en": null,
+    "sameWords": true
+  },
+  {
+    "d": "industrial screw compressor 220V",
+    "t": "Industrial screw compressor 380 V, control panel 220 V",
+    "expect": "incompatible",
+    "es": "Esta publicación indica 380 V para el equipo (220 V es de un componente); solicitaste 220 V",
+    "en": "This listing states 380 V for the equipment (220 V is for a component); you asked for 220 V",
+    "sameWords": true
+  },
+  {
+    "d": "industrial screw compressor 220V",
+    "t": "Industrial screw compressor 220V/380V",
+    "expect": "confirm",
+    "es": "Confirma que te coticen la variante de 220 V (el título ofrece 220 V / 380 V)",
+    "en": "Confirm they quote the 220 V variant (the title offers 220 V / 380 V)",
+    "sameWords": true
+  },
+  {
+    "d": "industrial screw compressor 220V",
+    "t": "Industrial screw compressor 220V",
+    "expect": "match",
+    "es": null,
+    "en": null,
+    "sameWords": true
+  },
+  {
+    "d": "compresor de tornillo, no 380 V",
+    "t": "Screw compressor 380V",
+    "expect": "incompatible",
+    "es": "Esta publicación indica 380 V, que excluiste",
+    "en": "This listing states 380 V, which you ruled out",
+    "sameWords": true
+  },
+  {
+    "d": "compresor de tornillo 220 o 380 V",
+    "t": "Screw compressor 380V",
+    "expect": "confirm",
+    "es": "Indica 380 V; mencionaste 220 V / 380 V: confirma qué voltaje necesitas",
+    "en": "States 380 V; you mentioned 220 V / 380 V: confirm which voltage you need",
+    "sameWords": true
+  },
+  {
+    "d": "Guantes desechables sin látex",
+    "t": "Latex disposable gloves",
+    "expect": "incompatible",
+    "es": "La publicación indica látex, un material que excluiste",
+    "en": "The listing states latex, a material you ruled out",
+    "sameWords": true
+  },
+  {
+    "d": "Guantes desechables sin látex",
+    "t": "Disposable nitrile gloves latex free",
+    "expect": "match",
+    "es": null,
+    "en": null,
+    "sameWords": true
+  },
+  {
+    "d": "Guantes desechables sin látex",
+    "t": "Disposable gloves",
+    "expect": "confirm",
+    "es": "La publicación no indica si contiene látex (lo excluiste); confírmalo con el proveedor.",
+    "en": "The listing does not state whether it contains latex (you ruled it out); confirm it with the supplier.",
+    "sameWords": true
+  },
+  {
+    "d": "Botas con puntera compuesta",
+    "t": "Steel toe safety boots",
+    "expect": "incompatible",
+    "es": "Indica puntera de acero; pediste puntera de material compuesto",
+    "en": "States a steel toe cap; you asked for composite",
+    "sameWords": true
+  },
+  {
+    "d": "Botas con puntera compuesta",
+    "t": "Composite toe safety boots",
+    "expect": "match",
+    "es": null,
+    "en": null,
+    "sameWords": true
+  },
+  {
+    "d": "Botas con puntera compuesta",
+    "t": "Safety boots",
+    "expect": "confirm",
+    "es": "La publicación no indica de qué es la puntera (pediste material compuesto); confírmalo con el proveedor.",
+    "en": "The listing does not state what the toe cap is made of (you asked for composite); confirm it with the supplier.",
+    "sameWords": true
+  },
+  {
+    "d": "Botas con puntera compuesta",
+    "t": "Composite toe cap for safety shoes",
+    "expect": "incompatible",
+    "es": "Parece un repuesto o accesorio, no el producto completo",
+    "en": "Looks like a spare part or accessory, not the complete product",
+    "sameWords": false
+  },
+  {
+    "d": "bomba de agua 24 V DC",
+    "t": "Submersible water pump 24V DC brushless",
+    "expect": "match",
+    "es": null,
+    "en": null,
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "bomba de agua 24VDC",
+    "t": "24VDC solar water pump",
+    "expect": "match",
+    "es": null,
+    "en": null,
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "bomba de agua 24 V CC",
+    "t": "DC 24V water pump high pressure",
+    "expect": "match",
+    "es": null,
+    "en": null,
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "water pump 24 V DC",
+    "t": "24 V DC water pump",
+    "expect": "match",
+    "es": null,
+    "en": null,
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "bomba de agua 24 V DC",
+    "t": "12V DC water pump",
+    "expect": "incompatible",
+    "es": "Esta publicación indica 12 V DC; solicitaste 24 V DC",
+    "en": "This listing states 12 V DC; you asked for 24 V DC",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "bomba de agua 24 V DC",
+    "t": "48V DC water pump",
+    "expect": "incompatible",
+    "es": "Esta publicación indica 48 V DC; solicitaste 24 V DC",
+    "en": "This listing states 48 V DC; you asked for 24 V DC",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "bomba de agua 24 V DC",
+    "t": "24V AC water pump",
+    "expect": "incompatible",
+    "es": "Esta publicación indica 24 V AC; solicitaste 24 V DC",
+    "en": "This listing states 24 V AC; you asked for 24 V DC",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "bomba de agua 24 V DC",
+    "t": "24 VCA water pump",
+    "expect": "incompatible",
+    "es": "Esta publicación indica 24 V AC; solicitaste 24 V DC",
+    "en": "This listing states 24 V AC; you asked for 24 V DC",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "bomba de agua 24 V DC",
+    "t": "220V AC water pump",
+    "expect": "incompatible",
+    "es": "Esta publicación indica 220 V AC; solicitaste 24 V DC",
+    "en": "This listing states 220 V AC; you asked for 24 V DC",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "bomba de agua 24 V DC",
+    "t": "Water pump 24V",
+    "expect": "confirm",
+    "es": "Tipo de corriente por confirmar: el título indica 24 V sin decir si es AC o DC; pediste 24 V DC",
+    "en": "Current type to confirm: the title states 24 V without saying whether it is AC or DC; you asked for 24 V DC",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "bomba de agua 24 V de corriente continua",
+    "t": "Water pump 24V",
+    "expect": "confirm",
+    "es": "Tipo de corriente por confirmar: el título indica 24 V sin decir si es AC o DC; pediste 24 V DC",
+    "en": "Current type to confirm: the title states 24 V without saying whether it is AC or DC; you asked for 24 V DC",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "bomba de agua 24 V DC",
+    "t": "Water pump 12V/24V DC",
+    "expect": "confirm",
+    "es": "Confirma que te coticen la variante de 24 V DC (el título ofrece 12 V DC / 24 V DC)",
+    "en": "Confirm they quote the 24 V DC variant (the title offers 12 V DC / 24 V DC)",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "bomba de agua 24 V DC",
+    "t": "Water pump 12-24V DC",
+    "expect": "match",
+    "es": null,
+    "en": null,
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "bomba de agua 24 V DC",
+    "t": "Water pump",
+    "expect": "confirm",
+    "es": "Voltaje del equipo por confirmar; pediste 24 V DC",
+    "en": "Equipment voltage to confirm; you asked for 24 V DC",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "bomba de agua 24 V",
+    "t": "24V DC water pump",
+    "expect": "match",
+    "es": null,
+    "en": null,
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "bomba de agua 24 V",
+    "t": "24V AC water pump",
+    "expect": "match",
+    "es": null,
+    "en": null,
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "bomba de agua 24 V",
+    "t": "12V DC water pump",
+    "expect": "incompatible",
+    "es": "Esta publicación indica 12 V DC; solicitaste 24 V",
+    "en": "This listing states 12 V DC; you asked for 24 V",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "bomba de agua 24 V",
+    "t": "220V AC water pump",
+    "expect": "incompatible",
+    "es": "Esta publicación indica 220 V AC; solicitaste 24 V",
+    "en": "This listing states 220 V AC; you asked for 24 V",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "bomba de agua 24 V",
+    "t": "Water pump 24V",
+    "expect": "match",
+    "es": null,
+    "en": null,
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "bomba de agua 24 V DC",
+    "t": "24V DC water pump with adapter input 100-240V AC",
+    "expect": "match",
+    "es": null,
+    "en": null,
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "bomba de agua 24 V DC",
+    "t": "Water pump, adapter 100-240V",
+    "expect": "confirm",
+    "es": "Voltaje del equipo por confirmar (el título indica 100-240 V solo para un componente, no para el equipo); pediste 24 V DC",
+    "en": "Equipment voltage to confirm (the title states 100-240 V only for a component, not for the equipment); you asked for 24 V DC",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "fuente de poder 24 V DC",
+    "t": "Switching power supply input 100-240V AC output 24V DC 10A",
+    "expect": "match",
+    "es": null,
+    "en": null,
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "fuente de poder 24 V DC",
+    "t": "Switching power supply input 220V output 12V DC",
+    "expect": "incompatible",
+    "es": "Esta publicación indica 12 V DC para el equipo (220 V es de un componente); solicitaste 24 V DC",
+    "en": "This listing states 12 V DC for the equipment (220 V is for a component); you asked for 24 V DC",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "cargador 12 V",
+    "t": "12V battery charger",
+    "expect": "match",
+    "es": null,
+    "en": null,
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "compresor de tornillo 220 V",
+    "t": "380 V compressor, not 220 V",
+    "expect": "incompatible",
+    "es": "Esta publicación indica 380 V y excluye 220 V; solicitaste 220 V",
+    "en": "This listing states 380 V and rules out 220 V; you asked for 220 V",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "compresor de tornillo 220 V",
+    "t": "Screw compressor 380V (no 220V)",
+    "expect": "incompatible",
+    "es": "Esta publicación indica 380 V y excluye 220 V; solicitaste 220 V",
+    "en": "This listing states 380 V and rules out 220 V; you asked for 220 V",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "compresor de tornillo 220 V",
+    "t": "Compresor de tornillo 380 V, no apto para 220 V",
+    "expect": "incompatible",
+    "es": "Esta publicación indica 380 V y excluye 220 V; solicitaste 220 V",
+    "en": "This listing states 380 V and rules out 220 V; you asked for 220 V",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "screw compressor 220 V",
+    "t": "Screw compressor 380V, 220V not available",
+    "expect": "incompatible",
+    "es": "Esta publicación indica 380 V y excluye 220 V; solicitaste 220 V",
+    "en": "This listing states 380 V and rules out 220 V; you asked for 220 V",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "compresor de tornillo 220 V",
+    "t": "Screw compressor 380V, control panel 220V",
+    "expect": "incompatible",
+    "es": "Esta publicación indica 380 V para el equipo (220 V es de un componente); solicitaste 220 V",
+    "en": "This listing states 380 V for the equipment (220 V is for a component); you asked for 220 V",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "compresor de tornillo 220 V",
+    "t": "Screw compressor 220V/380V optional",
+    "expect": "confirm",
+    "es": "Confirma que te coticen la variante de 220 V (el título ofrece 220 V / 380 V)",
+    "en": "Confirm they quote the 220 V variant (the title offers 220 V / 380 V)",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "compresor de tornillo 220 V",
+    "t": "Screw compressor 220V 380V",
+    "expect": "confirm",
+    "es": "Voltaje del equipo por confirmar: el título indica 220 V / 380 V sin decir a qué corresponde cada cifra; pediste 220 V",
+    "en": "Equipment voltage to confirm: the title states 220 V / 380 V without saying what each figure refers to; you asked for 220 V",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "compresor de tornillo 220 V",
+    "t": "Screw compressor, control panel 220V",
+    "expect": "confirm",
+    "es": "Voltaje del equipo por confirmar (el título indica 220 V solo para un componente, no para el equipo); pediste 220 V",
+    "en": "Equipment voltage to confirm (the title states 220 V only for a component, not for the equipment); you asked for 220 V",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "compresor de tornillo 220 V",
+    "t": "Screw compressor 220V",
+    "expect": "match",
+    "es": null,
+    "en": null,
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "compresor de tornillo 220 V",
+    "t": "Screw compressor 220-240V 60Hz",
+    "expect": "match",
+    "es": null,
+    "en": null,
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "compresor sin aceite 220 V",
+    "t": "Oil free compressor 220V",
+    "expect": "match",
+    "es": null,
+    "en": null,
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "oil-free compressor 220V, no oil",
+    "t": "Oil free silent compressor 220V",
+    "expect": "match",
+    "es": null,
+    "en": null,
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "compresor de 220 V, no quiero 110 V",
+    "t": "Compressor 110V",
+    "expect": "incompatible",
+    "es": "Esta publicación indica 110 V; solicitaste 220 V",
+    "en": "This listing states 110 V; you asked for 220 V",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "compresor, no 110 ni 127 V",
+    "t": "Compressor 127V",
+    "expect": "incompatible",
+    "es": "Esta publicación indica 127 V, que excluiste",
+    "en": "This listing states 127 V, which you ruled out",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "compresor, no 110 ni 127 V",
+    "t": "Compressor 220V",
+    "expect": "match",
+    "es": null,
+    "en": null,
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "bomba de agua 24 V",
+    "t": "Water pump 24W 50Hz",
+    "expect": "confirm",
+    "es": "Voltaje del equipo por confirmar; pediste 24 V",
+    "en": "Equipment voltage to confirm; you asked for 24 V",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "bomba de agua 24 V",
+    "t": "Water pump 2.4kW 24Ah battery",
+    "expect": "confirm",
+    "es": "Voltaje del equipo por confirmar; pediste 24 V",
+    "en": "Equipment voltage to confirm; you asked for 24 V",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "bomba de agua 24 V",
+    "t": "Water pump 2400VA",
+    "expect": "confirm",
+    "es": "Voltaje del equipo por confirmar; pediste 24 V",
+    "en": "Equipment voltage to confirm; you asked for 24 V",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "compresor de tornillo 220 V",
+    "t": "4V belt driven screw compressor 220V",
+    "expect": "match",
+    "es": null,
+    "en": null,
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "bomba de agua 24 V DC",
+    "t": "Pump with 100-240V AC adapter included",
+    "expect": "confirm",
+    "es": "Voltaje del equipo por confirmar (el título indica 100-240 V solo para un componente, no para el equipo); pediste 24 V DC",
+    "en": "Equipment voltage to confirm (the title states 100-240 V only for a component, not for the equipment); you asked for 24 V DC",
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "bomba de agua 24 V DC",
+    "t": "Pump AC/DC 24V",
+    "expect": "match",
+    "es": null,
+    "en": null,
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "compresor de tornillo 220 V",
+    "t": "Compressor 220V with 12V car adapter",
+    "expect": "match",
+    "es": null,
+    "en": null,
+    "sameWords": true,
+    "since": "02-11w"
+  },
+  {
+    "d": "compresor de tornillo 220 V",
+    "t": "Compressor 220V single phase or 380V three phase",
+    "expect": "confirm",
+    "es": "Confirma que te coticen la variante de 220 V (el título ofrece 220 V / 380 V)",
+    "en": "Confirm they quote the 220 V variant (the title offers 220 V / 380 V)",
+    "sameWords": true,
+    "since": "02-11w"
+  }
 ]
