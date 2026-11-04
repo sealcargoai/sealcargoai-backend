@@ -26,6 +26,10 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // Whole search must finish within this budget so the client never waits
 // indefinitely (the frontend gives up a bit later and offers a way out).
 const SEARCH_BUDGET_MS = parseInt(process.env.SEARCH_BUDGET_MS) || 75000;
+const UNBLOCK_PAUSE_MS = parseInt(process.env.UNBLOCK_PAUSE_MS) || 6 * 3600 * 1000;
+let unblockPausedUntil = 0;
+/** For /health: which route answered the last live search, and whether the Web Unblocker is in use. */
+export const searchRoute = { last: "", lastAt: null, unblocker: "unknown" };
 
 async function fetchAlibabaHtml(keyword, budgetMs = SEARCH_BUDGET_MS) {
   const url = buildAlibabaSearchUrl(keyword);
@@ -35,8 +39,12 @@ async function fetchAlibabaHtml(keyword, budgetMs = SEARCH_BUDGET_MS) {
   // ✅ 1) Try Oxylabs Web Unblocker proxy first (up to 3 retries)
   const ubUser = process.env.OXY_UNBLOCK_USER;
   const ubPass = process.env.OXY_UNBLOCK_PASS;
+  // 02-11s: production logs show the Web Unblocker rejecting these credentials (401) on every search; the
+  // Scraper API fallback answers. OXY_UNBLOCK_DISABLED=1 skips it, and after a 401/407 it is skipped for
+  // UNBLOCK_PAUSE_MS so a rejected route adds no attempt or delay to each search.
+  const unblockOff = process.env.OXY_UNBLOCK_DISABLED === "1" || Date.now() < unblockPausedUntil;
 
-  if (ubUser && ubPass) {
+  if (ubUser && ubPass && !unblockOff) {
     console.log("🛡️ Attempting Oxylabs Web Unblocker Proxy");
 
     // Try both raw and URL-encoded credentials for maximum proxy auth compatibility
@@ -82,6 +90,7 @@ async function fetchAlibabaHtml(keyword, budgetMs = SEARCH_BUDGET_MS) {
         console.log(`📄 HTML size (Unblocker attempt ${attempt}): ${html.length} bytes | Captcha: ${isCaptcha}`);
 
         if (!isCaptcha) {
+          Object.assign(searchRoute, { last: "web_unblocker", lastAt: new Date().toISOString(), unblocker: "ok" });
           console.log("✅ Web Unblocker successfully retrieved full Alibaba page!");
           return html;
         }
@@ -92,7 +101,8 @@ async function fetchAlibabaHtml(keyword, budgetMs = SEARCH_BUDGET_MS) {
         console.error(`❌ Unblocker attempt ${attempt} failed:`, status || e.message);
         // Bad credentials won't fix themselves on retry: go straight to the fallback
         if (status === 401 || status === 407) {
-          console.warn("🔑 Web Unblocker rejected the credentials (OXY_UNBLOCK_USER/PASS) — skipping retries");
+          unblockPausedUntil = Date.now() + UNBLOCK_PAUSE_MS;
+          console.warn(`🔑 Web Unblocker rejected the credentials (OXY_UNBLOCK_USER/PASS) — skipped for ${Math.round(UNBLOCK_PAUSE_MS / 3600000)} h`);
           break;
         }
       }
@@ -103,6 +113,8 @@ async function fetchAlibabaHtml(keyword, budgetMs = SEARCH_BUDGET_MS) {
     }
 
     console.warn("🛑 Web Unblocker exhausted all retries without clean HTML.");
+  } else if (unblockOff) {
+    console.log("⏭️ Web Unblocker skipped (disabled or credentials rejected recently) — using the Scraper API");
   } else {
     console.log("⚠️ Missing OXY_UNBLOCK_USER/OXY_UNBLOCK_PASS (skipping Web Unblocker proxy)");
   }
@@ -161,6 +173,7 @@ async function fetchAlibabaHtml(keyword, budgetMs = SEARCH_BUDGET_MS) {
         console.log(`📄 Scraper API HTML size ('${source}' attempt ${attempt}): ${html.length} bytes | Captcha: ${isCaptcha}`);
 
         if (html && !isCaptcha) {
+          Object.assign(searchRoute, { last: `scraper_api:${source}`, lastAt: new Date().toISOString(), unblocker: Date.now() < unblockPausedUntil ? "rejected_401" : process.env.OXY_UNBLOCK_DISABLED === "1" ? "disabled" : searchRoute.unblocker });
           console.log(`✅ Web Scraper API ('${source}') returned clean HTML!`);
           return html;
         }
@@ -450,7 +463,7 @@ function mapOffersToSuppliers(offerList, keyword) {
 /* ─────────────────────────────────────────────
    Main Scraper
 ───────────────────────────────────────────── */
-async function searchAlibabaScraper({ keyword, pageSize = 20, budgetMs }) {
+async function searchAlibabaScraper({ keyword, relevanceKeyword, pageSize = 20, budgetMs }) {
     const html = await fetchAlibabaHtml(keyword, budgetMs);
 
     if (!html || html.length < 10000) {
@@ -464,7 +477,9 @@ async function searchAlibabaScraper({ keyword, pageSize = 20, budgetMs }) {
         return [];
     }
 
-    const suppliers = mapOffersToSuppliers(offerList, keyword);
+    // 02-11s: titles are compared with the product words; the client's requirements added to the
+    // platform query ("220v", "latex free") are checked separately (services/specGate.js)
+    const suppliers = mapOffersToSuppliers(offerList, relevanceKeyword || keyword);
     const offerCount = offerList?.offerResultData?.offers?.length || 0;
     console.log(`✅ Mapped ${suppliers.length} related suppliers of ${offerCount} offers for keyword "${keyword}"`);
 
@@ -477,6 +492,6 @@ async function searchAlibabaScraper({ keyword, pageSize = 20, budgetMs }) {
 /* ─────────────────────────────────────────────
    Export
 ───────────────────────────────────────────── */
-export async function searchSuppliers({ keyword, pageSize = 20, budgetMs }) {
-    return await searchAlibabaScraper({ keyword, pageSize, budgetMs });
+export async function searchSuppliers({ keyword, relevanceKeyword, pageSize = 20, budgetMs }) {
+    return await searchAlibabaScraper({ keyword, relevanceKeyword, pageSize, budgetMs });
 }
