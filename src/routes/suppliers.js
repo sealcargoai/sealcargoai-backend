@@ -6,6 +6,7 @@ import { refineKeyword, shortenKeyword } from "./ai.js";
 import { clientIp, clean, malformedFields, unsupportedEmail, QTY_MIN, QTY_MAX, BUDGET_MAX } from "../middleware/security.js";
 import { sendSearchLead, scrubEmails } from "../services/email.js";
 import { sessionVerifies } from "../services/verifyStore.js";
+import { gateBySpecs, constrainKeyword } from "../services/specGate.js";
 
 // Send the search to SEAL sales without delaying the user's response
 function notifySearch(details) {
@@ -160,10 +161,12 @@ router.post("/search", async (req, res) => {
       material,
     });
 
-    console.log(`   🎯 Final Search Keyword: "${keyword}"`);
+    // 02-11s: the client's requirements survive translation and shortening ("sin látex" → "latex free")
+    const ck = constrainKeyword(keyword, userQuery);
+    console.log(`   🎯 Final Search Keyword: "${ck.searchKeyword}"`);
 
-    // ── Cache check (uses refined keyword) ──────────────────────────────────
-    const cacheKey = `search_${keyword}_${qty}_${bdg}`;
+    // ── Cache check (uses refined keyword; the gate depends on the description) ─
+    const cacheKey = `search_${ck.searchKeyword}_${qty}_${bdg}_${String(userQuery).toLowerCase().replace(/\s+/g, " ").trim()}`;
     const cached = cache.get(cacheKey);
     if (cached) {
       console.log("⚡ Cache hit\n");
@@ -199,32 +202,35 @@ router.post("/search", async (req, res) => {
     }
 
     // ── STEP 2: Fetch from Alibaba with refined keyword ─────────────────────
-    let rawSuppliers = await searchSuppliers({
-      keyword,
+    // 02-11s: explicit contradictions with the description leave BEFORE scoring and ordering
+    let rawSuppliers = gateBySpecs(await searchSuppliers({
+      keyword: ck.searchKeyword,
+      relevanceKeyword: ck.relevanceKeyword,
       pageSize: 20,
       quantity: qty,
-    });
+    }), userQuery);
 
     // ── STEP 3: Score and categorize ────────────────────────────────────────
     let result = categorizeSuppliers(scoreSuppliers(rawSuppliers, { budget: bdg, quantity: qty }));
-    let usedKeyword = keyword;
+    let usedKeyword = ck.searchKeyword;
 
     // ── STEP 3b: one retry with a shorter keyword ───────────────────────────
     // Very specific keywords (from long descriptions) sometimes return nothing.
     // If the first try was quick enough, retry with the core product name.
     // The page waits ~95 s, so the retry only runs with time to spare.
     if (!result?.totalAnalyzed && Date.now() - startedAt < 55000) {
-      const shorter = await shortenKeyword(keyword);
+      const short = constrainKeyword(await shortenKeyword(keyword), userQuery);
+      const shorter = short.searchKeyword;
       const budgetMs = 88000 - (Date.now() - startedAt);
-      if (shorter && shorter.toLowerCase() !== keyword.toLowerCase() && budgetMs > 20000) {
-        console.log(`🔁 No usable results for "${keyword}" — retrying with "${shorter}" (${Math.round(budgetMs / 1000)}s left)`);
-        const raw2 = await searchSuppliers({ keyword: shorter, pageSize: 20, quantity: qty, budgetMs });
+      if (shorter && shorter.toLowerCase() !== ck.searchKeyword.toLowerCase() && budgetMs > 20000) {
+        console.log(`🔁 No usable results for "${ck.searchKeyword}" — retrying with "${shorter}" (${Math.round(budgetMs / 1000)}s left)`);
+        const raw2 = gateBySpecs(await searchSuppliers({ keyword: shorter, relevanceKeyword: short.relevanceKeyword, pageSize: 20, quantity: qty, budgetMs }), userQuery);
         const r2 = categorizeSuppliers(scoreSuppliers(raw2, { budget: bdg, quantity: qty }));
         if (r2?.totalAnalyzed) {
           rawSuppliers = raw2;
           result = r2;
           usedKeyword = shorter;
-        } else if ((raw2?.offerCount || 0) > (rawSuppliers?.offerCount || 0)) {
+        } else if ((raw2?.offerCount || 0) > (rawSuppliers?.offerCount || 0) || (raw2?.specExcluded || 0) > (rawSuppliers?.specExcluded || 0)) {
           rawSuppliers = raw2;
         }
       }
@@ -238,12 +244,14 @@ router.post("/search", async (req, res) => {
       const noRelevantMatches = (rawSuppliers?.offerCount || 0) > 0;
       ticket.release();
       console.log(noRelevantMatches
-        ? `⚠️ ${rawSuppliers.offerCount} offers, none related to "${keyword}" — asking client for more detail`
+        ? `⚠️ ${rawSuppliers.offerCount} offers, none related to "${usedKeyword}" (${rawSuppliers.specExcluded || 0} contradicted the request) — asking client for more detail`
         : "⚠️ Not caching empty supplier result");
       return res.json({
         ...result,
         fromCache: false,
         searchKeyword: usedKeyword,
+        specExcluded: rawSuppliers?.specExcluded || 0,
+        specReasons: rawSuppliers?.specReasons || [],
         blocked: !noRelevantMatches,
         noRelevantMatches,
         message: noRelevantMatches
@@ -262,6 +270,8 @@ router.post("/search", async (req, res) => {
       seen.set(`${userEmail || ip}|${cacheKey}`, Date.now());
     }
     else ticket.release();
+    result.specExcluded = rawSuppliers?.specExcluded || 0;
+    result.specReasons = rawSuppliers?.specReasons || [];
     cache.set(cacheKey, result);
     notifySearch({
       email: userEmail,

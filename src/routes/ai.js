@@ -28,7 +28,8 @@ export async function refineKeyword({ userQuery, productType, material }) {
     .slice(0, 4)
     .join(" ")
     .trim();
-  const withoutExclusions = rawInput.toLowerCase().replace(/\b(?:no|ni|excepto|salvo|not|nor|except)\b[^.,;:]*/g, " ");
+  // 02-11s: "sin látex" / "without latex" too: "guantes sin látex" used to give the keyword "guantes desechables látex"
+  const withoutExclusions = rawInput.toLowerCase().replace(/(?:^|[^a-záéíóúüñ])(?:no|ni|sin|excepto|salvo|not|nor|except|without)(?![a-záéíóúüñ])[^.,;:]*/g, " ").replace(/\b[a-z]+[\s-]free\b/g, " ");
   // if everything was an exclusion ("no para carne ni pintura"), keep the plain words
   const fallbackClean = productWords(withoutExclusions) || productWords(rawInput);
 
@@ -58,6 +59,7 @@ Rules:
 - Keep it concise (2-5 words): the product name plus its key technical attribute (for example capacity or number of needles).
 - Leave out quantities, packaging, who it is for (students, kids, restaurants) and phrases like "I need" or "to import".
 - Never include what the user rules out ("no para carne ni pintura", "not for paint"): leave those words out entirely.
+- Keep explicit technical requirements in the platform's words: voltage ("220V"), phase ("3 phase"), "latex free" for "sin látex", "composite toe" for "puntera compuesta". Never write a material the user rules out as if it were wanted ("sin látex" is never "latex gloves").
 Examples: "lápices escolares de madera para estudiantes, paquete de 500 unidades" -> "wooden pencils"; "bordadora industrial de 15 agujas para gorras" -> "15 needle embroidery machine"; "molino para maíz y especias de 100 kg/h, no para carne ni pintura" -> "corn spice grinder 100kg/h".`
             },
             {
