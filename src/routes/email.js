@@ -15,7 +15,7 @@ import { recordEvent } from "../services/funnelStore.js";
 import { linksFor, baseUrl, caseLink } from "./leads.js";
 import { isEmail, unsupportedEmail, clean, quantityError, budgetError, malformedFields } from "../middleware/security.js";
 import { emailKey, identityKey, verifySigned } from "../services/quotaStore.js";
-import { startVerification, cancelVerification, confirmVerification, grantValid, reportCapOk, consumeGrantAndCount } from "../services/verifyStore.js";
+import { startVerification, cancelVerification, confirmVerification, grantValid, reportCapOk, consumeGrantAndCount, issueChallenge, renewGrant } from "../services/verifyStore.js";
 // 02-11l: if the verification store cannot be read or written nothing is granted or sent (fail closed)
 const STORE_DOWN = { error: "verify_unavailable", message: "Email verification is temporarily unavailable. Nothing was sent. Try again in a few minutes." };
 const storeDown = (err) => err?.code === "VERIFY_STORE";
@@ -298,7 +298,12 @@ router.post("/verify/start", async (req, res) => {
     // 02-11l: SEAL's own sales addresses never get codes, but they go through the same limits and answer
     // the same way as any address (they used to answer at once and never be limited, which told them apart)
     const commercial = isCommercialAddress(email);
-    const r = startVerification(email, ip, undefined, { noCode: commercial });
+    const pow = typeof b.challenge === "string" && typeof b.nonce === "string" ? { challenge: b.challenge.slice(0, 200), nonce: b.nonce.slice(0, 40) } : null;
+    const r = startVerification(email, ip, undefined, { noCode: commercial, pow });
+    if (!r.ok && r.reason === "challenge") {
+      // 02-11o: the service is under pressure: solve this challenge in the browser and ask again
+      return res.status(428).json({ error: "challenge_required", challenge: issueChallenge(email, ip, r.bits), difficulty: r.bits, message: "Too many code requests right now. Your browser will do a short check and ask again." });
+    }
     if (!r.ok) {
       res.set("Retry-After", String(r.retryAfterSeconds || 60));
       return res.status(429).json({ error: "verify_limit", retryAfterSeconds: r.retryAfterSeconds || 60, message: "Too many codes requested for now. Wait and try again; the codes already sent still work." });
@@ -323,6 +328,23 @@ router.post("/verify/start", async (req, res) => {
     console.error("❌ /email/verify/start:", scrubEmails(err.message));
     res.status(500).json({ error: "Could not send email" });
   }
+});
+// 02-11o: renew: a verified session (12 h) → a new one-use report grant, without emailing a new code
+router.post("/verify/renew", (req, res) => {
+  const b = req.body || {};
+  if (unsupportedEmail(b.email)) return res.status(400).json(EMAIL_NOT_SUPPORTED);
+  const email = typeof b.email === "string" && b.email.trim().length <= 254 ? clean(b.email, 254) : "";
+  if (!isEmail(email) || typeof b.session !== "string") return res.status(400).json({ error: "invalid_request" });
+  let r;
+  try {
+    r = renewGrant(b.session, email);
+  } catch (err) {
+    if (!storeDown(err)) throw err;
+    console.error("❌ /email/verify/renew: verify store:", err.message);
+    return res.status(503).json(STORE_DOWN);
+  }
+  if (!r) return res.status(403).json({ error: "session_invalid", message: "Confirm your email with a new code." });
+  res.json({ reportGrant: r.reportGrant, grantSeconds: r.grantSeconds });
 });
 // confirm: the code → a 12-hour session and a one-use report grant (random tokens, kept only as hashes)
 router.post("/verify/confirm", (req, res) => {

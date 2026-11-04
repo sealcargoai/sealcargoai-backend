@@ -448,3 +448,69 @@ Con 8 caracteres, los mismos casos daban 4.78e-4, 4.77e-3 y 4.67e-2: con 100 000
 - **Global:** el tope de 300 códigos por hora protege la reputación del remitente. A cambio, un atacante con unas 30 IP puede agotarlo y dejar la verificación sin servicio para todos durante una hora.
 - **Proveedor de correo:** demasiados rebotes o quejas pueden llevar a Resend o a Gmail a limitar el remitente. Se recomienda vigilar el panel de Resend (rebotes y quejas).
 - Para reducirlo más haría falta un CAPTCHA o un servicio anti-abuso. Requiere credenciales nuevas y posiblemente costo; no se agregó.
+
+## 02-11o — agotamiento global de códigos: cupo por red, desafío adaptativo, reserva y recuperación del titular
+
+Versión `2026.11.04-o`. Pruebas nuevas en `test/verificacion-02-11o.test.mjs` (12) y en `test/riesgo-codigos.test.mjs` (1 más).
+
+### Causa raíz
+
+El tope global de 300 códigos por hora protegía la reputación del remitente, pero tenía cuatro problemas:
+
+- **Era fácil de agotar.** Bastaban 30 IP a 10 por hora, aunque fueran de una misma red. Mientras durara, nadie recibía código.
+- **Las direcciones de ventas de SEAL gastaban cupo** aunque a ellas nunca se les envía nada.
+- **No había desafío** que encareciera los pedidos automatizados.
+- **No había manera de pedir otro informe sin un código nuevo.**
+
+### Cambios
+
+| Control | Detalle |
+|---|---|
+| Direcciones de ventas | Pasan por los mismos límites por dirección e IP, con la misma respuesta y una demora parecida. No gastan cupo global ni de red, y no se guarda ningún código para ellas. |
+| Cupo por red | Una red (IPv4 /24, IPv6 /48) puede usar como máximo 30 de los 300 códigos por hora. |
+| Desafío adaptativo (prueba de trabajo) | Desde el 50 % del cupo de la hora, cada pedido debe traer resuelto un desafío firmado por el servidor: SHA-256(desafío:nonce) con 16 ceros iniciales, y 18 desde el 80 %. El desafío queda ligado a la dirección y a la conexión, vale 5 minutos y sirve una sola vez. Aplica también a las direcciones de ventas, para que la respuesta sea idéntica. Sin servicios externos ni credenciales. |
+| Reserva | Agotados los 300, quedan 60 códigos por hora para redes que no pidieron nada en esa hora: uno por red, con el desafío de 18 bits. Techo para el remitente: 360 por hora. |
+| Recuperación del titular | Con su sesión verificada de las últimas 12 h, el titular obtiene otra autorización de informe sin que se le mande un código nuevo (`POST /api/email/verify/renew`), hasta 10 por día. Además, los códigos que ya recibió siguen valiendo 15 minutos, y nadie puede anularlos. |
+| Envío fallido | Devuelve todos los cupos, incluidos el de red y el global o de reserva. |
+
+### Costo de agotar el cupo de una hora (parámetros reales; `node scripts/riesgo-codigos.mjs`)
+
+- Antes (02-11n): 300 códigos con al menos 30 IP, aunque fueran de una sola red, y sin trabajo de cómputo.
+- Ahora: Agotar el cupo de una hora: 360 códigos, ≥70 redes, ≥90 IP, ~3.74e+7 hashes SHA-256 de desafío
+
+**Lectura honesta:**
+- Unos 3.7·10⁷ hashes son segundos de CPU para un atacante con código nativo. El desafío detiene a los bots que no lo resuelven y encarece el ataque, pero no impide un agotamiento organizado con 70 redes o más.
+- En ese caso, quien ya verificó su correo en las últimas 12 h sigue pudiendo enviar su informe, y los códigos ya recibidos siguen sirviendo.
+- Una persona nueva tendría que esperar a que se libere cupo.
+- Para cerrar del todo ese escenario haría falta un servicio anti-abuso externo (por ejemplo Cloudflare Turnstile o hCaptcha). Requiere una clave del sitio y una secreta, y tal vez costo, así que no se agregó. Para integrarlo harían falta: una variable con la clave secreta en Railway, la clave del sitio en Vercel y la verificación del token en `/verify/start` antes del desafío.
+
+El riesgo de adivinar un código no cambia: la tabla de 02-11n sigue siendo válida, porque el tope de 12 códigos por hora y dirección es el mismo.
+
+### Modelo de amenaza (resumen)
+
+| Actor | Lo que puede hacer | Lo que ya no puede |
+|---|---|---|
+| Bot que no resuelve el desafío | Hasta 150 códigos por hora (el primer 50 %) | Gastar cupo después del 50 % |
+| Red única | 30 códigos por hora | Agotar el cupo global |
+| Atacante distribuido con cómputo nativo | Agotar 360 por hora con ≥70 redes | Anular códigos ya recibidos o la sesión del titular |
+| Tercero que conoce un correo | Mandarle hasta 12 códigos por hora (molestia) | Adivinar el código, gastar la autorización del titular o sus topes de informes |
+
+### Evidencia
+
+- `npm ci && npm test`: **193 de 193**, 0 fallas, 0 omitidas.
+- En 1 de unas 8 corridas completas falló de forma intermitente la prueba 5 de 02-11k, porque contaba todos los correos del servidor. Un aviso sin esperar (de otra prueba) podía llegar tarde bajo carga. Se corrigió contando solo los correos de ese caso. Después de corregirla, la suite completa pasó en 2 corridas seguidas.
+- Desafío en un navegador real (Chromium local, sin GPU): uno de 16 bits se resolvió en ~0.8 s. El de 18 bits debería tardar unas 4 veces más; esa cifra es una estimación, no se midió.
+- Mutaciones (cada una hace fallar al menos una prueba de 02-11o):
+  - ventas que gastan cupo;
+  - sin cupo por red;
+  - sin desafío;
+  - desafío reutilizable;
+  - desafío no ligado a la dirección;
+  - `cancel` que no devuelve el cupo de red ni el global.
+- Concurrencia real: 30 procesos de 30 redes con tope 10 y reserva 2 → exactamente 12 códigos.
+
+### Resend (solo lectura, 04-11-2026)
+
+- Ver 02-11n: los registros DNS públicos (DKIM, SPF y MX de `send.`, DMARC `p=none` del dominio principal) están presentes.
+- El panel de Resend no estaba disponible: no había sesión iniciada y no se inició ninguna. La clave de producción da `no_access`.
+- El estado «Verified» y la entrega real **siguen sin verificarse**. Solo se pueden confirmar en el panel, o con un envío de prueba controlado y autorizado.

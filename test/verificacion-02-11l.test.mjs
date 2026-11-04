@@ -245,10 +245,12 @@ test("13 · revisión: bloqueo vencido se recupera; bloqueo vivo → error contr
   assert.ok(!fs.existsSync(lock), "bloqueo liberado");
 });
 
-test("14 · revisión: tope global de códigos por hora; direcciones de ventas sin código guardado", () => {
+test("14 · revisión: tope global de códigos por hora; direcciones de ventas sin código guardado", async () => {
   const s = createVerifyStore({ secret: SECRET, env: { VERIFY_MAX_GLOBAL_HOUR: "3" } });
   const t = Date.now();
-  assert.deepEqual([1, 2, 3, 4].map((i) => s.start(`g${i}@cliente-ficticio.test`, `10.84.0.${i}`, t + i).ok), [true, true, true, false]);
+  // 02-11o: past half of the budget the browser solves a challenge (startSolving does it like the browser)
+  const { startSolving } = await import("./fixtures/pow.mjs");
+  assert.deepEqual([1, 2, 3, 4].map((i) => startSolving(s, `g${i}@cliente-ficticio.test`, `10.84.0.${i}`, t + i).ok), [true, true, true, false]);
   const dir = tmp();
   const p = createVerifyStore({ dir, secret: SECRET });
   assert.deepEqual(p.start("ventas@example.test", "10.85.0.1", t, { noCode: true }), { ok: true, code: "" });

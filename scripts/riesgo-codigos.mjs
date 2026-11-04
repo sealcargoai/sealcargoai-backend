@@ -25,11 +25,28 @@ export function risk({ alphabet, length, codeMinutes, maxCodesPerHour, failsPerI
   const atLeastOne = (p) => -Math.expm1(G * Math.log1p(-p));
   return { N, G, bound: atLeastOne(Vmax / N), expected: atLeastOne(Vavg / N) };
 }
+/**
+ * 02-11o — Cost for a distributed actor to use up ALL the code budget of one hour (main + reserve).
+ * networks: each network (/24, /48) can take perNetworkHour of the main budget; each reserve code needs a
+ * network that has not asked this hour. ips: each IP can take perIpHour. hashes: expected work of the
+ * challenges (2^bits per solved challenge) for the codes past 50 % and 80 % of the main budget and the reserve.
+ */
+export function exhaustion({ globalHour, reserveHour, perNetworkHour, perIpHour, powAt, powBits }) {
+  const networks = Math.ceil(globalHour / perNetworkHour) + reserveHour;
+  const ips = Math.ceil(globalHour / perIpHour) + reserveHour;
+  const free = Math.ceil(globalHour * powAt[0]);
+  const mid = Math.ceil(globalHour * powAt[1]) - free;
+  const hard = globalHour - free - mid + reserveHour;
+  const hashes = mid * 2 ** powBits[0] + hard * 2 ** powBits[1];
+  return { networks, ips, codes: globalHour + reserveHour, hashes };
+}
 export const fmt = (p) => (p < 1e-12 ? "<1e-12" : p.toExponential(2));
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const P = codeRiskParams({});
   console.log("Parámetros:", JSON.stringify(P));
+  const X = exhaustion(P);
+  console.log(`Agotar el cupo de una hora: ${X.codes} códigos, ≥${X.networks} redes, ≥${X.ips} IP, ~${X.hashes.toExponential(2)} hashes SHA-256 de desafío`);
   for (const len of [8, P.length]) {
     for (const K of [1_000, 10_000, 100_000]) {
       const r = risk({ ...P, length: len }, K, 24 * 365);

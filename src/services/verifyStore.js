@@ -18,7 +18,12 @@
 //   · up to 3 codes per hour per (address, IP), with a progressive wait between them (0 s, 30 s, 60 s)
 //   · up to 6 codes per hour per address; past them, a connection that asked at most once for that address
 //     in the last hour and has not been locked for wrong codes still gets a code, up to 12 per hour
-//   · 10 per hour per IP; 300 per hour for the whole service; 30,000 tracked keys
+//   · 10 per hour per IP; 30 per hour per network (/24, IPv6 /48); 300 per hour for the whole service
+//     (SEAL's sales addresses do not count: nothing is sent to them); then a reserve of 60/hour, one code per
+//     network that has not asked this hour, with the hardest challenge (ceiling 360/hour); 30,000 tracked keys
+//   · adaptive challenge (02-11o): past 50 % / 80 % of the hourly global budget, a proof of work in the
+//     browser (16 / 18 bits) is required for every request, bound to address + connection and used once
+//   · recovery (02-11o): a verified session (12 h) gives a new report grant without a new code
 //   · a new code never cancels an earlier one: every code sent in the last 15 minutes stays valid
 //   · wrong codes lock only the (address, IP) that typed them: 5 per hour. There is NO lock per address
 //     (a lock per address was a way for a third
@@ -37,6 +42,30 @@ const num = (v, d) => {
   const n = parseInt(v, 10);
   return Number.isFinite(n) && n > 0 ? n : d;
 };
+
+/** 02-11o: the network of a client key: IPv4 /24, IPv6 /48 (client keys for IPv6 are already /64). */
+export function netKey(ip) {
+  const x = String(ip || "");
+  const v4 = x.match(/^(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}$/);
+  if (v4) return `${v4[1]}.0/24`;
+  const v6 = x.match(/^([0-9a-f]{1,4}:[0-9a-f]{1,4}:[0-9a-f]{1,4}):/i);
+  if (v6) return `${v6[1].toLowerCase()}::/48`;
+  return x;
+}
+/** Leading zero bits of SHA-256(challenge:nonce). */
+export function powBits(challenge, nonce) {
+  const d = crypto.createHash("sha256").update(`${challenge}:${nonce}`).digest();
+  let bits = 0;
+  for (const b of d) {
+    if (b === 0) {
+      bits += 8;
+      continue;
+    }
+    bits += Math.clz32(b) - 24;
+    break;
+  }
+  return bits;
+}
 
 export class VerifyStoreError extends Error {
   constructor(msg) {
@@ -72,6 +101,17 @@ export function createVerifyStore({ dir = "", secret, env = process.env } = {}) 
     waitSeconds: env.VERIFY_RESEND_WAIT_SECONDS === "0" ? 0 : num(env.VERIFY_RESEND_WAIT_SECONDS, 30),
     failsPerAddressIpHour: 5,
     globalHour: num(env.VERIFY_MAX_GLOBAL_HOUR, 300),
+    // 02-11o: one network (IPv4 /24, IPv6 /48) cannot take more than 30 of the 300 codes per hour
+    perNetworkHour: num(env.VERIFY_MAX_PER_NETWORK_HOUR, 30),
+    // 02-11o: once the 300 are used, a reserve of 60 codes/hour for networks that have not asked for any
+    // code this hour (one each, always with the hardest challenge). Hard ceiling: 360/hour for the sender.
+    reserveHour: num(env.VERIFY_RESERVE_HOUR, 60),
+    // 02-11o: adaptive challenge (proof of work in the browser) when the hourly global use passes 50 % / 80 %
+    powAt: [0.5, 0.8],
+    powBits: [num(env.VERIFY_POW_BITS_1, 16), num(env.VERIFY_POW_BITS_2, 18)],
+    powMs: 5 * MIN,
+    // 02-11o: a verified session (12 h) can be exchanged for a new report grant, without a new code (10/day)
+    renewPerDay: 10,
     maxTracked: num(env.VERIFY_MAX_TRACKED, 30000),
   };
   const key = secret || (env.VERIFY_SECRET ? Buffer.from(env.VERIFY_SECRET) : deriveKey("verify-store"));
@@ -83,7 +123,7 @@ export function createVerifyStore({ dir = "", secret, env = process.env } = {}) 
   let memory = empty();
 
   function empty() {
-    return { codes: {}, sessions: {}, grants: {}, sent: {}, fails: {}, reports: {} };
+    return { codes: {}, sessions: {}, grants: {}, sent: {}, fails: {}, reports: {}, used: {}, renew: {} };
   }
   function prune(s, now) {
     for (const k of Object.keys(s.codes)) {
@@ -91,10 +131,12 @@ export function createVerifyStore({ dir = "", secret, env = process.env } = {}) 
       if (!s.codes[k].length) delete s.codes[k];
     }
     for (const m of [s.sessions, s.grants]) for (const k of Object.keys(m)) if (now > m[k].exp) delete m[k];
+    for (const k of Object.keys(s.used)) if (now > s.used[k]) delete s.used[k];
     for (const [m, win] of [
       [s.sent, HOUR],
       [s.fails, DAY],
       [s.reports, DAY],
+      [s.renew, DAY],
     ])
       for (const k of Object.keys(m)) {
         m[k] = m[k].filter((t) => now - t < win);
@@ -202,12 +244,20 @@ export function createVerifyStore({ dir = "", secret, env = process.env } = {}) 
      * A new code → { ok: true, code } | { ok: false, reason: "invalid" } | { ok: false, reason: "rate_limited",
      * retryAfterSeconds }. The caller emails the code; it is never returned to the client.
      */
-    start(email, ip, now = Date.now(), { noCode = false } = {}) {
+    /** 02-11o: a signed challenge for this address and connection (difficulty in bits, valid 5 minutes). */
+    challenge(email, ip, bits, now = Date.now()) {
+      const identity = identityKey(email) || "-";
+      const r = crypto.randomBytes(9).toString("base64url");
+      const body = `${now}.${r}.${bits}`;
+      return `${body}.${h(`pow|${body}|${identity}|${ip || ""}`).slice(0, 22)}`;
+    },
+    start(email, ip, now = Date.now(), { noCode = false, pow = null } = {}) {
       const identity = identityKey(email);
       if (!identity) return { ok: false, reason: "invalid" };
       const A = `a:${h(identity)}`;
       const I = `i:${h(String(ip || ""))}`;
       const AI = `ai:${h(`${identity}|${ip || ""}`)}`;
+      const NET = `n:${h(netKey(ip))}`;
       return tx(now, (s) => {
         const ai = recent(s.sent[AI], now, HOUR);
         const a = recent(s.sent[A], now, HOUR);
@@ -224,20 +274,50 @@ export function createVerifyStore({ dir = "", secret, env = process.env } = {}) 
         if (ai.length >= L.perAddressIpHour) return limited(oldest(ai));
         if (a.length >= L.perAddressHour && !(reserved && a.length < L.perAddressHardHour)) return limited(oldest(a));
         if (i.length >= L.perIpHour) return limited(oldest(i));
+        // 02-11o: per network: a single /24 (or IPv6 /48) cannot use more than a tenth of the global budget
+        const n = recent(s.sent[NET], now, HOUR);
+        if (n.length >= L.perNetworkHour) return limited(oldest(n));
         // global bounds: codes per hour for the whole service (protects the sender's reputation) and the
         // number of tracked keys (protects the file size); past them, nobody gets a new code for a while
         const g = recent(s.sent.g, now, HOUR);
-        if (g.length >= L.globalHour || Object.keys(s.sent).length >= L.maxTracked) return limited(g.length ? oldest(g) : 5 * MIN);
+        const gr = recent(s.sent.gr, now, HOUR);
+        // past the main budget, only the reserve: a network with no code this hour, one code, hardest challenge
+        const useReserve = g.length >= L.globalHour && !n.length && gr.length < L.reserveHour && !noCode;
+        if ((g.length >= L.globalHour && !useReserve) || Object.keys(s.sent).length >= L.maxTracked) return limited(g.length ? oldest(g) : 5 * MIN);
         // progressive wait for the same (address, IP): 0 s, then 30 s, then 60 s
         if (ai.length && L.waitSeconds) {
           const wait = L.waitSeconds * SEC * 2 ** (ai.length - 1) - (now - Math.max(...ai));
           if (wait > 0) return limited(wait);
         }
-        for (const k of [AI, A, I, "g"]) (s.sent[k] = s.sent[k] || []).push(now);
-        // SEAL's own sales addresses: counted like any other, but no code exists (nothing to guess)
+        // 02-11o: adaptive challenge. Past 50 % (then 80 %) of the hourly budget every request — also for
+        // SEAL's sales addresses, so the answer stays uniform — must carry a solved proof of work bound to
+        // this address and connection, used once. It makes a distributed flood cost CPU per code; a person
+        // pays a second or two in the browser, only while the service is under pressure.
+        const need = useReserve || g.length >= L.globalHour * L.powAt[1] ? L.powBits[1] : g.length >= L.globalHour * L.powAt[0] ? L.powBits[0] : 0;
+        if (need) {
+          const c = String(pow?.challenge || "");
+          const parts = c.split(".");
+          const [ts, r, bits, mac] = parts;
+          const body = `${ts}.${r}.${bits}`;
+          const valid =
+            parts.length === 4 &&
+            Number(bits) >= need &&
+            now - Number(ts) >= 0 &&
+            now - Number(ts) <= L.powMs &&
+            mac === h(`pow|${body}|${identity}|${ip || ""}`).slice(0, 22) &&
+            !s.used[`u:${h(c)}`] &&
+            typeof pow?.nonce === "string" &&
+            pow.nonce.length <= 32 &&
+            powBits(c, pow.nonce) >= need;
+          if (!valid) return { ok: false, reason: "challenge", bits: need };
+          s.used[`u:${h(c)}`] = Number(ts) + L.powMs;
+        }
+        // SEAL's own sales addresses: they answer like any other but no code exists (nothing to guess) and,
+        // 02-11o, they do not use the global or network budget (no email is sent to them)
+        for (const k of noCode ? [AI, A, I] : [AI, A, I, NET, useReserve ? "gr" : "g"]) (s.sent[k] = s.sent[k] || []).push(now);
         if (noCode) return { ok: true, code: "" };
         const code = Array.from({ length: CODE_LENGTH }, () => CODE_ALPHABET[crypto.randomInt(0, CODE_ALPHABET.length)]).join("");
-        (s.codes[A] = s.codes[A] || []).push({ c: h(`${identity}|${code}`), exp: now + L.codeMs, ai: AI, i: I, t: now });
+        (s.codes[A] = s.codes[A] || []).push({ c: h(`${identity}|${code}`), exp: now + L.codeMs, ai: AI, i: I, n: NET, g: useReserve ? "gr" : "g", t: now });
         return { ok: true, code };
       });
     },
@@ -251,7 +331,7 @@ export function createVerifyStore({ dir = "", secret, env = process.env } = {}) 
         const c = (s.codes[A] || []).find((x) => x.c === want);
         if (!c) return;
         s.codes[A] = s.codes[A].filter((x) => x !== c);
-        for (const [m, k] of [[s.sent, A], [s.sent, c.ai], [s.sent, c.i], [s.sent, "g"]]) {
+        for (const [m, k] of [[s.sent, A], [s.sent, c.ai], [s.sent, c.i], [s.sent, c.n], [s.sent, c.g || "g"]]) {
           const list = m[k] || [];
           const at = list.lastIndexOf(c.t);
           if (at >= 0) list.splice(at, 1);
@@ -327,6 +407,24 @@ export function createVerifyStore({ dir = "", secret, env = process.env } = {}) 
       return tx(now, (s) => s.grants[h(`g|${token}`)]?.id === h(identity));
     },
     /** Uses a report grant: true only once (atomic across processes), for its own address, before it expires. */
+    /**
+     * 02-11o: a verified session (proof of control of the mailbox in the last 12 h) → a new single-use report
+     * grant, without a new code. At most 10 per address per day. null if the session is not valid for it.
+     */
+    renew(sessionToken, email, now = Date.now()) {
+      const identity = identityKey(email);
+      if (!identity || !okToken(sessionToken)) return null;
+      const ID = h(identity);
+      const R = `r:${ID}`;
+      return tx(now, (s) => {
+        if (s.sessions[h(`s|${sessionToken}`)]?.id !== ID) return null;
+        if (recent(s.renew[R], now, DAY).length >= L.renewPerDay) return null;
+        (s.renew[R] = s.renew[R] || []).push(now);
+        const reportGrant = randomToken();
+        s.grants[h(`g|${reportGrant}`)] = { id: ID, exp: now + L.grantMs };
+        return { reportGrant, grantSeconds: L.grantMs / SEC };
+      });
+    },
     consumeGrant(token, email, now = Date.now()) {
       const identity = identityKey(email);
       if (!identity || !okToken(token)) return false;
@@ -349,6 +447,12 @@ export function codeRiskParams(env = process.env) {
     codeMinutes: L.codeMs / MIN,
     maxCodesPerHour: L.perAddressHardHour,
     failsPerIpHour: L.failsPerAddressIpHour,
+    globalHour: L.globalHour,
+    reserveHour: L.reserveHour,
+    perNetworkHour: L.perNetworkHour,
+    perIpHour: L.perIpHour,
+    powAt: L.powAt,
+    powBits: L.powBits,
   };
 }
 
@@ -359,6 +463,8 @@ export const verifyPersistent = store.persistent;
 /** /health: "persistent" | "persistent-ephemeral-key" (hashes unusable after a restart) | "memory". */
 export const verifyStoreStatus = () => (!store.persistent ? "memory" : store.keyShared ? "persistent" : "persistent-ephemeral-key");
 export const startVerification = (email, ip, now, opts) => store.start(email, ip, now, opts);
+export const issueChallenge = (email, ip, bits, now) => store.challenge(email, ip, bits, now);
+export const renewGrant = (session, email, now) => store.renew(session, email, now);
 export const cancelVerification = (email, ip, code, now) => store.cancel(email, ip, code, now);
 export const confirmVerification = (email, code, ip, now) => store.confirm(email, code, ip, now);
 export const grantValid = (token, email, now) => store.grantValid(token, email, now);

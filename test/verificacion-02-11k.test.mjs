@@ -137,16 +137,19 @@ test("4 · el informe solo va al buzón verificado; un PDF o datos del navegador
 test("5 · caso repetido sin token: nada cambia, ningún correo ni enlace; con el token del titular sí se actualiza", async () => {
   const base = { name: "Eva", email: "eva@cliente-ficticio.test", product: "válvulas de bola de bronce", supplierName: "Valvulas SA", quantity: "10", budget: "1000", message: "original" };
   const first = await (await S.post("/api/email/quote", base, ip())).json();
-  const k = S.attempts().length;
+  // (02-11o) only this case's emails are counted: an un-awaited email of an earlier test (search notices)
+  // can land later under load and made this count flaky
+  const mine = () => S.attempts().filter((m) => String(m.subject || "").includes(first.id) || /válvulas de bola/i.test(String(m.html || ""))).length;
+  const k = mine();
   const forged = await (await S.post("/api/email/quote", { ...base, quantity: "999", budget: "5", message: "alterado", caseAuth: [`${first.id}:falso`] }, ip())).json();
   assert.deepEqual(forged, { success: true, duplicate: true, unchanged: true });
-  assert.equal(S.attempts().length, k);
+  assert.equal(mine(), k);
   let j = JSON.stringify(await (await fetch(first.caseUrl + "&format=json")).json());
   assert.ok(!/alterado|999/.test(j));
   const caseAuth = [`${first.id}:${new URL(first.caseUrl).searchParams.get("t")}`];
   const up = await (await S.post("/api/email/quote", { ...base, quantity: "20", message: "nueva cantidad", caseAuth }, ip())).json();
   assert.deepEqual([up.duplicate, up.updated, up.id], [true, true, first.id]);
-  assert.equal(S.attempts().length, k + 1, "una actualización a SEAL");
+  assert.equal(mine(), k + 1, "una actualización a SEAL");
   j = JSON.stringify(await (await fetch(first.caseUrl + "&format=json")).json());
   assert.ok(/nueva cantidad/.test(j));
 });
