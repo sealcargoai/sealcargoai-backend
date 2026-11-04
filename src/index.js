@@ -1,6 +1,8 @@
 import path from "node:path";
 import dotenv from "dotenv";
+import { guardTls, tlsStatus } from "./tlsGuard.js";
 dotenv.config();   // ✅ MUST BE FIRST
+guardTls();        // 02-11q: certificate checks on for every outgoing HTTPS call
 
 import express from "express";
 import cors from "cors";
@@ -97,7 +99,7 @@ export function storageStatus() {
   };
 }
 
-export const BACKEND_VERSION = "2026.11.04-q";
+export const BACKEND_VERSION = "2026.11.04-r";
 app.get("/health", (_req, res) => {
   res.json({
     status:          "ok",
@@ -113,6 +115,8 @@ app.get("/health", (_req, res) => {
     // 02-11l: sender configuration and its domain status at Resend (read-only check, statuses only)
     emailSender:     senderStatus(),
     emailSends:      emailSendStats(),
+    // 02-11q: whether outgoing HTTPS verifies certificates
+    tls:             tlsStatus(),
     // 02-11m: whether the data folders are on the volume Railway attached (status only, never paths/secrets)
     storage:         storageStatus(),
     timestamp:       new Date().toISOString(),
