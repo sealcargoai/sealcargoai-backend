@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { risk, fmt } from "../scripts/riesgo-codigos.mjs";
+import { risk, fmt, exhaustion } from "../scripts/riesgo-codigos.mjs";
 const { codeRiskParams } = await import("../src/services/verifyStore.js");
 
 const YEAR = 24 * 365;
@@ -30,4 +30,12 @@ test("el cierre publica exactamente las cifras que da el cálculo (no otras)", (
   }
   // the wrong 02-11m statement is marked as corrected, not repeated as valid
   assert.match(sec, /subestimad/);
+});
+
+test("02-11o: el cierre publica el costo real de agotar el cupo de una hora (redes, IP, trabajo del desafío)", () => {
+  const X = exhaustion(P);
+  assert.ok(X.networks >= 70 && X.ips >= 90, JSON.stringify(X));
+  const doc = fs.readFileSync("CIERRE-02-11C.md", "utf8");
+  const sec = doc.slice(doc.indexOf("## 02-11o"));
+  assert.ok(sec.includes(`${X.codes} códigos, ≥${X.networks} redes, ≥${X.ips} IP, ~${X.hashes.toExponential(2)} hashes`), "cifras de agotamiento en el cierre");
 });
