@@ -10,7 +10,7 @@ export function server(portBase, env) {
   const s = { BASE: "", proc: null, logs: "" };
   const once = (PORT) =>
     new Promise((resolve, reject) => {
-      const p = spawn(process.execPath, ["--import", path.resolve("test/fixtures/stub-register.mjs"), "--import", path.resolve("test/fake-resend.mjs"), "src/index.js"], {
+      const p = spawn(process.execPath, ["--import", path.resolve("test/fixtures/stub-register.mjs"), "--import", path.resolve("test/fake-resend.mjs"), "--import", path.resolve("test/fixtures/fake-groq.mjs"), "src/index.js"], {
         env: {
           ...process.env,
           PORT: String(PORT),
