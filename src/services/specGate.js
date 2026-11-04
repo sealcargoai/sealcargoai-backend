@@ -6,6 +6,8 @@
 // subset of the page's own comparison (frontend utils/differences.ts), so the server never drops a listing
 // the page would recommend.
 
+import { voltageCheck } from "./voltage.js";
+
 const NEG = String.raw`(?:no|ni|sin|excepto|salvo|not|nor|except|excluding|without)`;
 const low = (t) => ` ${String(t || "").toLowerCase()} `;
 
@@ -24,7 +26,7 @@ function latexIssue(desc, title) {
 
 // ── voltage and phase ──────────────────────────────────────────────────────────
 const RANGE = /(\d{3})\s*(?:-|–|~|to|a)\s*(\d{3})\s*(?:v|volts?|voltios?|vac|vca)\b/g;
-const VOLTS = /(\d{2,3})(?:\s*\/\s*(\d{2,3}))*\s*(?:v|volts?|voltios?|vac|vca)\b/g;
+const VOLTS = /(\d{2,3})(?:\s*(?:\/|\bo\b|\bu\b|\bor\b)\s*(\d{2,3}))*\s*(?:v|volts?|voltios?|vac|vca)\b/g;
 const NEG_VOLTS = new RegExp(String.raw`\b${NEG}\s+(?:[a-záéíóúüñ]+\s+){0,3}?(\d{2,3})\s*(?:v|volts?|voltios?|vac)\b`, "g");
 function electric(text) {
   const ranges = [];
@@ -39,26 +41,11 @@ function electric(text) {
 }
 const SINGLE = /\b(?:monof[aá]sic[oa]s?|single[\s-]*phase|1[\s-]*(?:phase|fase|ph)\b)/;
 const THREE = /\b(?:trif[aá]sic[oa]s?|three[\s-]*phase|3[\s-]*(?:phase|fases?|ph)\b)/;
+// 02-11t: the equipment's voltage only (a component's "control panel 220 V" is not the equipment's), with
+// the same rules and words as the page (services/voltage.js ⇄ frontend utils/voltage.ts)
 function voltageIssue(desc, title) {
-  let d = low(desc);
-  const ruled = [];
-  d = d.replace(NEG_VOLTS, (_m, v) => (ruled.push(+v), " "));
-  const want = electric(d);
-  want.volts = want.volts.filter((v) => !ruled.includes(v));
-  const got = electric(low(title));
-  const gotAny = got.volts.length + got.ranges.length > 0;
-  if (!gotAny) return "";
-  const meets = (v) => got.volts.includes(v) || got.ranges.some(([a, b]) => v >= a && v <= b);
-  const wantAny = want.volts.length + want.ranges.length > 0;
-  const ok =
-    want.volts.some(meets) ||
-    want.ranges.some(([a, b]) => got.volts.some((v) => v >= a && v <= b) || got.ranges.some(([c, e]) => c <= b && e >= a));
-  const g = [...got.ranges.map(([a, b]) => `${a}-${b} V`), ...got.volts.map((v) => `${v} V`)].join(" / ");
-  const w = [...want.ranges.map(([a, b]) => `${a}-${b} V`), ...want.volts.map((v) => `${v} V`)].join(" / ");
-  if (wantAny && !ok) return { es: `La publicación indica ${g}; solicitaste ${w}`, en: `The listing states ${g}; you asked for ${w}` };
-  if (!wantAny && ruled.length && got.ranges.length === 0 && got.volts.every((v) => ruled.includes(v)))
-    return { es: `La publicación indica ${got.volts.join(" / ")} V, que excluiste`, en: `The listing states ${got.volts.join(" / ")} V, which you ruled out` };
-  return "";
+  const v = voltageCheck(desc, title);
+  return v?.verdict === "incompatible" ? { es: v.es, en: v.en } : "";
 }
 function phaseIssue(desc, title) {
   const d = low(desc).replace(new RegExp(String.raw`\b${NEG}\s+(?:[a-záéíóúüñ]+\s+){0,3}?(?:monof[aá]sic\w*|trif[aá]sic\w*|single[\s-]*phase|three[\s-]*phase)`, "g"), " ");
@@ -88,8 +75,8 @@ function toeIssue(desc, title) {
   const t = low(title);
   const steel = T_STEEL.test(t);
   const comp = T_COMP.test(t);
-  if (want === "composite" && steel && !comp) return { es: "Indica puntera de acero; pediste puntera de material compuesto", en: "States a steel toe cap; you asked for a composite one" };
-  if (want === "steel" && comp && !steel) return { es: "Indica puntera de material compuesto; pediste puntera de acero", en: "States a composite toe cap; you asked for a steel one" };
+  if (want === "composite" && steel && !comp) return { es: "Indica puntera de acero; pediste puntera de material compuesto", en: "States a steel toe cap; you asked for composite" };
+  if (want === "steel" && comp && !steel) return { es: "Indica puntera de material compuesto; pediste puntera de acero", en: "States a composite toe cap; you asked for steel" };
   return "";
 }
 
@@ -111,6 +98,39 @@ export function contradiction(description, title) {
   return "";
 }
 
+// what the page says when the title is silent about something asked (same words as frontend materialUnstated)
+const OTHER_GLOVE_MATERIAL = /\b(?:nitri(?:le|lo)|vin(?:yl|ilo)|pvc|tpe|neopren[eo]|polyethylene|polietileno|pe)\b/;
+function unstated(desc, title) {
+  const t = low(title);
+  const out = [];
+  NO_LATEX.lastIndex = 0;
+  const noLatex = wantsNoLatex(desc);
+  NO_LATEX.lastIndex = 0;
+  if (noLatex && !NO_LATEX.test(t) && !LATEX.test(t) && !OTHER_GLOVE_MATERIAL.test(t))
+    out.push({ es: "La publicación no indica si contiene látex (lo excluiste); confírmalo con el proveedor.", en: "The listing does not state whether it contains latex (you ruled it out); confirm it with the supplier." });
+  NO_LATEX.lastIndex = 0;
+  const toe = toeWanted(desc);
+  if (toe && !T_STEEL.test(t) && !T_COMP.test(t))
+    out.push(
+      toe === "composite"
+        ? { es: "La publicación no indica de qué es la puntera (pediste material compuesto); confírmalo con el proveedor.", en: "The listing does not state what the toe cap is made of (you asked for composite); confirm it with the supplier." }
+        : { es: "La publicación no indica de qué es la puntera (pediste acero); confírmalo con el proveedor.", en: "The listing does not state what the toe cap is made of (you asked for steel); confirm it with the supplier." },
+    );
+  return out;
+}
+
+/**
+ * 02-11t: the verdict the page shows for the properties checked here: "incompatible" (with the reason),
+ * "confirm" (something asked is not stated, or several voltages) or "match" (per the listing, not verified).
+ */
+export function specVerdict(description, title) {
+  const bad = contradiction(description, title);
+  if (bad) return { verdict: "incompatible", reasons: [bad], toConfirm: [] };
+  const v = voltageCheck(description, title);
+  const toConfirm = [...(v?.verdict === "confirm" ? [{ es: v.es, en: v.en }] : []), ...unstated(description, title)];
+  return { verdict: toConfirm.length ? "confirm" : "match", reasons: [], toConfirm };
+}
+
 /**
  * Removes the listings whose title contradicts the description. Keeps the list's offerCount and adds
  * specExcluded (count) and specReasons (up to 5 examples as { es, en }, no client text).
@@ -122,7 +142,10 @@ export function gateBySpecs(list, description) {
   for (const s of src) {
     const r = contradiction(description, s?.productName || "");
     if (r) reasons.push(r);
-    else kept.push(s);
+    else {
+      const v = specVerdict(description, s?.productName || "");
+      kept.push({ ...s, specVerdict: { verdict: v.verdict, notes: v.toConfirm.slice(0, 3) } });
+    }
   }
   kept.offerCount = src.offerCount ?? src.length;
   kept.specExcluded = reasons.length;
@@ -144,9 +167,10 @@ export function constraintTerms(description) {
   const ruled = [];
   const dd = d.replace(NEG_VOLTS, (_m, v) => (ruled.push(+v), " "));
   const e = electric(dd);
-  const v = e.volts.find((x) => !ruled.includes(x));
-  if (v) out.push(`${v}v`);
-  else if (e.ranges.length) out.push(`${e.ranges[0][0]}-${e.ranges[0][1]}v`);
+  const vs = e.volts.filter((x) => !ruled.includes(x));
+  // one voltage asked: it goes in the query; several («220 o 380 V») stay undecided (nothing added)
+  if (vs.length === 1 && !e.ranges.length) out.push(`${vs[0]}v`);
+  else if (!vs.length && e.ranges.length === 1) out.push(`${e.ranges[0][0]}-${e.ranges[0][1]}v`);
   const toe = toeWanted(description);
   if (toe) out.push(`${toe} toe`);
   return out;
@@ -156,8 +180,37 @@ export function constraintTerms(description) {
  * material that slipped into the keyword ("guantes sin látex" → "latex gloves") is taken out of both; the
  * client's requirements are added to the platform query only, so they don't lower the relevance share.
  */
+// 02-11t: what the translation may add or change that the client never asked for. The ORIGINAL description
+// decides: a voltage, phase or toe-cap material in the keyword that the description doesn't ask for (or rules
+// out) is removed before the query is built ("220 V" translated as "industrial compressor 380v").
+const KW_VOLT = /\b\d{2,3}(?:\s*[\/-]\s*\d{2,3})*\s*(?:v|volts?|vac)\b/gi;
+const KW_PHASE = /\b(?:single|one|1|three|3)[\s-]*(?:phase|ph)\b/gi;
+function sanitizeKeyword(keyword, description) {
+  const d = low(description);
+  const ruled = [];
+  const dd = d.replace(NEG_VOLTS, (_m, v) => (ruled.push(+v), " "));
+  NEG_VOLTS.lastIndex = 0;
+  const e = electric(dd);
+  const wanted = e.volts.filter((x) => !ruled.includes(x));
+  const okVolt = (v) => wanted.includes(v) || e.ranges.some(([a, b]) => v >= a && v <= b);
+  let k = String(keyword || "").replace(KW_VOLT, (m) => {
+    const vs = (m.match(/\d{2,3}/g) || []).map(Number);
+    return vs.length && vs.every(okVolt) ? m : " ";
+  });
+  const dSingle = SINGLE.test(d);
+  const dThree = THREE.test(d);
+  k = k.replace(KW_PHASE, (m) => {
+    const single = /^(?:single|one|1)/i.test(m);
+    return (single && dSingle) || (!single && dThree) ? m : " ";
+  });
+  const toe = toeWanted(description);
+  if (toe !== "steel") k = k.replace(/\b(?:steel|metal(?:lic)?)(?=[\s-]+(?:toes?|toe\s*caps?|toecaps?)\b)/gi, " ");
+  if (toe !== "composite") k = k.replace(/\b(?:composite|non[\s-]*metal(?:lic)?|fiberglass)(?=[\s-]+(?:toes?|toe\s*caps?|toecaps?)\b)/gi, " ");
+  return k.replace(/\s+/g, " ").trim();
+}
+
 export function constrainKeyword(keyword, description) {
-  let k = String(keyword || "").replace(/\s+/g, " ").trim();
+  let k = sanitizeKeyword(keyword, description);
   NO_LATEX.lastIndex = 0;
   if (wantsNoLatex(description) && !/l[aá]tex[\s-]*free|non[\s-]*l[aá]tex/i.test(k)) k = k.replace(/\bl[aá]tex\b/gi, " ").replace(/\s+/g, " ").trim();
   NO_LATEX.lastIndex = 0;
