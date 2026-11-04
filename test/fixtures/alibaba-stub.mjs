@@ -30,7 +30,15 @@ const mk = (i, o) => ({
   storeUrl: `https://example.invalid/s/${i}`,
   relevance: o.rel ?? 0.9,
 });
-export async function searchSuppliers({ keyword }) {
+export async function searchSuppliers({ keyword, relevanceKeyword }) {
+  // 02-11s: STUB_KW_LOG records what the platform was asked; STUB_OFFERS = JSON array of listing titles
+  if (process.env.STUB_KW_LOG) (await import("node:fs")).appendFileSync(process.env.STUB_KW_LOG, JSON.stringify({ keyword, relevanceKeyword }) + "\n");
+  if (process.env.STUB_OFFERS) {
+    const titles = JSON.parse(process.env.STUB_OFFERS);
+    const r = titles.map((title, i) => mk(i + 1, { name: `[PRUEBA] Proveedor ficticio ${i + 1}`, title, price: 100 + i * 10, moq: 1, unit: "pieces", gold: true, years: 6, verifiedBadge: true, rating: 4.6, reviews: 20, store: 4.5 }));
+    r.offerCount = r.length;
+    return r;
+  }
   if (/vac[ií]o|nothingfound/i.test(keyword)) {
     const r = [];
     r.offerCount = 0;
@@ -58,3 +66,6 @@ export async function searchSuppliers({ keyword }) {
   list.offerCount = list.length;
   return list;
 }
+
+// 02-11s: the real module exports the route of the last search (for /health)
+export const searchRoute = { last: "stub", lastAt: null, unblocker: "stub" };
