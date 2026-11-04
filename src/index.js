@@ -1,6 +1,7 @@
 import path from "node:path";
 import dotenv from "dotenv";
 import { guardTls, tlsStatus } from "./tlsGuard.js";
+import { searchRoute } from "./services/alibaba.js";
 dotenv.config();   // ✅ MUST BE FIRST
 guardTls();        // 02-11q: certificate checks on for every outgoing HTTPS call
 
@@ -99,7 +100,7 @@ export function storageStatus() {
   };
 }
 
-export const BACKEND_VERSION = "2026.11.04-r";
+export const BACKEND_VERSION = "2026.11.04-s";
 app.get("/health", (_req, res) => {
   res.json({
     status:          "ok",
@@ -117,6 +118,8 @@ app.get("/health", (_req, res) => {
     emailSends:      emailSendStats(),
     // 02-11q: whether outgoing HTTPS verifies certificates
     tls:             tlsStatus(),
+    // 02-11s: which route answered the last live supplier search (since start), and the Web Unblocker state
+    searchRoute:     { ...searchRoute },
     // 02-11m: whether the data folders are on the volume Railway attached (status only, never paths/secrets)
     storage:         storageStatus(),
     timestamp:       new Date().toISOString(),
