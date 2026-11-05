@@ -6,10 +6,16 @@ if (process.env.FAKE_GROQ_KEYWORD || process.env.FAKE_GROQ_VISION || process.env
   axios.post = async (url, body, ...rest) => {
     if (!String(url).includes("api.groq.com")) return real(url, body, ...rest);
     // 02-11x: a request carrying an image is the photo analysis; FAKE_GROQ_LOG records what was sent
-    const parts = [].concat(body?.messages?.[1]?.content || []);
+    const parts = (body?.messages || []).flatMap((m) => [].concat(m?.content || [])).filter((p) => typeof p === "object");
     const image = parts.find((p) => p?.type === "image_url");
     if (image) {
-      if (process.env.FAKE_GROQ_LOG) (await import("node:fs")).appendFileSync(process.env.FAKE_GROQ_LOG, JSON.stringify({ model: body.model, text: parts.find((p) => p?.type === "text")?.text || "", imageBytes: String(image.image_url?.url || "").length, ...(process.env.FAKE_GROQ_LOG_IMAGE === "1" ? { image: image.image_url?.url } : {}), response_format: body.response_format }) + "\n");
+      if (process.env.FAKE_GROQ_LOG) (await import("node:fs")).appendFileSync(process.env.FAKE_GROQ_LOG, JSON.stringify({ model: body.model, roles: (body.messages || []).map((m) => m.role), text: parts.find((p) => p?.type === "text")?.text || "", imageBytes: String(image.image_url?.url || "").length, ...(process.env.FAKE_GROQ_LOG_IMAGE === "1" ? { image: image.image_url?.url } : {}), response_format: body.response_format }) + "\n");
+      // FAKE_GROQ_JSON_400=1: like production on 2026-11-05 when JSON mode is refused (the retry has no response_format)
+      if (process.env.FAKE_GROQ_JSON_400 === "1" && body.response_format) {
+        const err = new Error("Request failed with status code 400");
+        err.response = { status: 400, data: { error: { message: "fake: response_format not supported with images" } } };
+        throw err;
+      }
       if (process.env.FAKE_GROQ_VISION_STATUS) {
         const err = new Error(`Request failed with status code ${process.env.FAKE_GROQ_VISION_STATUS}`);
         err.response = { status: Number(process.env.FAKE_GROQ_VISION_STATUS), data: {} };
