@@ -7,6 +7,7 @@ import { clientIp, clean, malformedFields, unsupportedEmail, QTY_MIN, QTY_MAX, B
 import { sendSearchLead, scrubEmails } from "../services/email.js";
 import { sessionVerifies } from "../services/verifyStore.js";
 import { gateBySpecs, constrainKeyword } from "../services/specGate.js";
+import { parseImage, analyzeProductImage } from "../services/vision.js";
 
 // Send the search to SEAL sales without delaying the user's response
 function notifySearch(details) {
@@ -59,6 +60,20 @@ router.get("/quota", (req, res) => {
     remaining: remainingSearches(email, ip, qaVerified),
     reason: limitReason(email, ip, qaVerified),
   });
+});
+
+// 02-11x: a photo (optional) → what product it shows, as a SUGGESTION the client confirms on the page.
+// Nothing is searched, counted, stored or emailed here; the photo lives only in this request.
+router.post("/image-analyze", async (req, res) => {
+  const body = req.body && typeof req.body === "object" && !Array.isArray(req.body) ? req.body : {};
+  const malformed = malformedFields(body, ["image", "description", "lang"]);
+  if (malformed.length) return res.status(400).json({ error: "invalid_fields", fields: malformed });
+  const img = parseImage(body.image);
+  if (!img.ok) return res.status(400).json({ error: img.error });
+  const lang = body.lang === "en" ? "en" : "es";
+  const r = await analyzeProductImage({ dataUrl: body.image, description: typeof body.description === "string" ? body.description.slice(0, 1500) : "", lang });
+  if (r.unavailable) return res.json({ unavailable: true, reason: r.reason });
+  res.json({ ok: true, ...r });
 });
 
 router.post("/search", async (req, res) => {
