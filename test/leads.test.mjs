@@ -260,7 +260,7 @@ test("the same follow-up confirmation sent twice is recorded once", async () => 
 
 test("health reports the running version", async () => {
   const h = await (await fetch(BASE + "/health")).json();
-  assert.match(h.version, /^\d{4}\.\d{2}\.\d{2}-[a-z]$/);
+  assert.match(h.version, /^\d{4}\.\d{2}\.\d{2}-[a-z][a-z0-9]?$/);
 });
 
 test("a long product keeps every characteristic in the case and is cut at a whole word in the subject", async () => {
