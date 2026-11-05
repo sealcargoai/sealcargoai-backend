@@ -18,7 +18,11 @@ if (process.env.FAKE_GROQ_KEYWORD || process.env.FAKE_GROQ_VISION || process.env
       }
       if (process.env.FAKE_GROQ_VISION_STATUS) {
         const err = new Error(`Request failed with status code ${process.env.FAKE_GROQ_VISION_STATUS}`);
-        err.response = { status: Number(process.env.FAKE_GROQ_VISION_STATUS), data: {} };
+        // FAKE_GROQ_ERROR_ECHO=1: a provider that repeats its input in the error (worst case for logs)
+        const sentText = parts.find((p) => p?.type === "text")?.text || "";
+        // the end of the text (where the client's description is) first, then the photo
+        const echo = process.env.FAKE_GROQ_ERROR_ECHO === "1" ? `bad input: ${sentText.slice(-160)} ${image.image_url?.url || ""}` : undefined;
+        err.response = { status: Number(process.env.FAKE_GROQ_VISION_STATUS), data: echo ? { error: { message: echo } } : {} };
         throw err;
       }
       return { data: { choices: [{ message: { content: process.env.FAKE_GROQ_VISION || "{}" }, finish_reason: "stop" }] } };
