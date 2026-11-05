@@ -7,7 +7,7 @@
 // - Groq free plan (no payment method): a daily cap keeps the analyses inside the free limits; over the cap,
 //   busy (429) or any error → "unavailable", and the client continues with the text (nothing is charged).
 import axios from "axios";
-import { reserveVision, visionUsage, resetMemoryUsage } from "./visionStore.js";
+import { reserveVisionAsync, visionUsage, resetMemoryUsage } from "./visionStore.js";
 
 export const IMAGE_MAX_BYTES = 1_500_000;
 const TYPES = { "image/jpeg": "jpeg", "image/png": "png", "image/webp": "webp" };
@@ -79,9 +79,10 @@ export async function analyzeProductImage({ dataUrl, description = "", lang = "e
   // can't be read or written, the provider is not called (fail closed) and the client continues with the text
   let reserved;
   try {
-    reserved = reserveVision(dailyMax());
-  } catch {
-    console.warn("⚠️ Photo analysis not attempted: the daily counter could not be read or written");
+    reserved = await reserveVisionAsync(dailyMax());
+  } catch (e) {
+    // only the error code (ENOSPC, EACCES…) or a fixed reason, never a request field
+    console.warn(`⚠️ Photo analysis not attempted: the daily counter could not be read or written (${/^E[A-Z]+$/.test(String(e?.code)) ? e.code : "store_error"})`);
     return { unavailable: true, reason: "limit_unavailable" };
   }
   if (!reserved.ok) return { unavailable: true, reason: "daily_limit" };

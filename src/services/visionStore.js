@@ -12,6 +12,17 @@
 // Without any data folder (local development) the count lives in memory and /health says store: "memory".
 // Scope: this caps the analyses THIS service asks for. It does not see other apps using the same Groq key,
 // and it holds only while the volume is mounted (Railway attaches a volume to one service).
+// 02-11z2 (review):
+// - On Railway, a folder that is NOT inside the mounted volume (volume detached, wrong DATA_DIR) would be
+//   created on the container's temporary disk and reset on every deploy: then the store refuses (fail closed,
+//   /health store "not-on-volume") instead of pretending to be persistent.
+// - Every lock holds its own random token. Taking over an old lock renames it first and checks it is still
+//   that old lock (same token, still old), and a release only removes the lock with its own token: two processes that both find the same old lock cannot both get in.
+// - A failed write (disk full, no permission) removes its temp file and leaves the last good count in place.
+// - The day never goes backwards: if another instance's clock already wrote a later UTC day, that day and
+//   its count are kept (a slightly late clock cannot reset the count to 0).
+// - The server waits for a held lock with a timer (reserveVisionAsync), so other requests keep being answered.
+// - The day is the UTC date whatever TZ says: in Guatemala (UTC-6) the quota starts again at 18:00.
 import fs from "node:fs";
 import path from "node:path";
 
@@ -19,9 +30,19 @@ const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 
 export const utcDay = (now = Date.now()) => new Date(now).toISOString().slice(0, 10);
 const memory = { day: "", used: 0 };
 
+const onRailway = () => !!(process.env.RAILWAY_PROJECT_ID || process.env.RAILWAY_SERVICE_ID || process.env.RAILWAY_ENVIRONMENT_NAME);
+function insideVolume(dir) {
+  const vol = process.env.RAILWAY_VOLUME_MOUNT_PATH || "";
+  if (!vol) return false;
+  const d = path.resolve(dir);
+  const v = path.resolve(vol);
+  return d === v || d.startsWith(v + path.sep);
+}
+
 function where() {
   const d = process.env.VISION_DATA_DIR || process.env.DATA_DIR || "";
-  return d ? { dir: d, file: path.join(d, "vision-usage.json"), lock: path.join(d, "vision-usage.lock") } : null;
+  if (!d) return null;
+  return { dir: d, file: path.join(d, "vision-usage.json"), lock: path.join(d, "vision-usage.lock"), notOnVolume: onRailway() && !insideVolume(d) };
 }
 
 function readState(file) {
@@ -37,61 +58,168 @@ function readState(file) {
   return { day: j.day, used: j.used };
 }
 
-function withLock(w, fn) {
-  fs.mkdirSync(w.dir, { recursive: true });
-  const deadline = Date.now() + 2000;
-  let fd;
-  for (;;) {
-    try {
-      fd = fs.openSync(w.lock, "wx", 0o600);
-      break;
-    } catch (e) {
-      if (e.code !== "EEXIST") throw e;
-      try {
-        if (Date.now() - fs.statSync(w.lock).mtimeMs > 10_000) {
-          fs.rmSync(w.lock, { force: true });
-          continue;
-        }
-      } catch {
-        continue; // released between the open and the stat
-      }
-      if (Date.now() > deadline) throw new Error("vision usage lock timeout");
-      pause(5);
-    }
+const readToken = (file) => {
+  try {
+    return fs.readFileSync(file, "utf8");
+  } catch {
+    return null;
   }
+};
+
+// One attempt to take the lock: the open fd, or null when someone else holds a recent one (the caller waits).
+// Each lock carries its own token: inode numbers are reused by the file system, so they cannot tell an old
+// lock from a new one.
+function tryLock(w, token) {
+  let fd;
+  try {
+    fd = fs.openSync(w.lock, "wx", 0o600);
+  } catch (e) {
+    if (e.code !== "EEXIST") throw e;
+    let st;
+    try {
+      st = fs.statSync(w.lock);
+    } catch {
+      return tryLock(w, token); // released between the open and the stat
+    }
+    if (Date.now() - st.mtimeMs > 10_000) {
+      takeOver(w.lock, readToken(w.lock));
+      return tryLock(w, token);
+    }
+    return null;
+  }
+  try {
+    fs.writeSync(fd, token);
+  } catch (e) {
+    fs.closeSync(fd);
+    fs.rmSync(w.lock, { force: true });
+    throw e;
+  }
+  return fd;
+}
+
+function runLocked(w, fd, token, fn) {
   try {
     return fn();
   } finally {
     fs.closeSync(fd);
-    fs.rmSync(w.lock, { force: true });
+    // only the lock this call created (if it was ever taken over as old, the new holder's stays)
+    if (readToken(w.lock) === token) fs.rmSync(w.lock, { force: true });
   }
+}
+
+const prepare = (w) => {
+  if (w.notOnVolume) throw new Error("vision usage folder is not on the mounted volume");
+  fs.mkdirSync(w.dir, { recursive: true });
+  return { token: `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`, deadline: Date.now() + 2000 };
+};
+
+// synchronous version (scripts and tests): waits by pausing the thread
+function withLock(w, fn) {
+  const { token, deadline } = prepare(w);
+  for (;;) {
+    const fd = tryLock(w, token);
+    if (fd !== null) return runLocked(w, fd, token, fn);
+    if (Date.now() > deadline) throw new Error("vision usage lock timeout");
+    pause(5);
+  }
+}
+
+// 02-11z2: the server's version waits with a timer, so a held lock never freezes the other requests
+async function withLockAsync(w, fn) {
+  const { token, deadline } = prepare(w);
+  for (;;) {
+    const fd = tryLock(w, token);
+    if (fd !== null) return runLocked(w, fd, token, fn); // the read-check-write itself stays synchronous
+    if (Date.now() > deadline) throw new Error("vision usage lock timeout");
+    await new Promise((r) => setTimeout(r, 5));
+  }
+}
+
+// An old lock is moved aside (rename is atomic: only one process moves a given file). If what was moved is not
+// the old lock that was examined (its token differs, or it is recent: someone else took it over and created a
+// fresh one meanwhile), it is put back with link(), which never overwrites, and nobody enters on that turn.
+function takeOver(lock, seenToken) {
+  const aside = `${lock}.old-${process.pid}-${Math.random().toString(36).slice(2)}`;
+  try {
+    fs.renameSync(lock, aside);
+  } catch {
+    return; // someone else moved it first
+  }
+  try {
+    let recent = true;
+    try {
+      recent = Date.now() - fs.statSync(aside).mtimeMs <= 10_000;
+    } catch {
+      /* treat as recent */
+    }
+    if (recent || readToken(aside) !== seenToken) {
+      try {
+        fs.linkSync(aside, lock);
+      } catch {
+        /* a newer lock already exists: that one wins */
+      }
+    }
+  } finally {
+    fs.rmSync(aside, { force: true });
+  }
+}
+
+function syncDir(dir) {
+  // makes the rename itself durable; some file systems do not allow fsync on a folder (then it is skipped)
+  let fd;
+  try {
+    fd = fs.openSync(dir, "r");
+    fs.fsyncSync(fd);
+  } catch {
+    /* not supported */
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+  }
+}
+
+function reserveIn(w, max, day) {
+  const s = readState(w.file);
+  // the day never goes backwards (another instance's clock may be a little ahead)
+  const today = s.day > day ? s.day : day;
+  const used = s.day === today ? s.used : 0;
+  if (used >= max) return { ok: false, reason: "daily_limit", used };
+  const tmp = `${w.file}.${process.pid}.tmp`;
+  try {
+    const fd = fs.openSync(tmp, "w", 0o600);
+    try {
+      fs.writeSync(fd, JSON.stringify({ day: today, used: used + 1 }));
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tmp, w.file);
+  } catch (e) {
+    fs.rmSync(tmp, { force: true });
+    throw e;
+  }
+  syncDir(w.dir);
+  return { ok: true, used: used + 1 };
+}
+
+function reserveMemory(max, day) {
+  if (memory.day !== day) Object.assign(memory, { day, used: 0 });
+  if (memory.used >= max) return { ok: false, reason: "daily_limit", used: memory.used };
+  memory.used += 1;
+  return { ok: true, used: memory.used };
 }
 
 /** Takes one analysis from today's cap: { ok: true, used } or { ok: false, reason: "daily_limit", used }. Throws if the store fails. */
 export function reserveVision(max, now = Date.now()) {
   const day = utcDay(now);
   const w = where();
-  if (!w) {
-    if (memory.day !== day) Object.assign(memory, { day, used: 0 });
-    if (memory.used >= max) return { ok: false, reason: "daily_limit", used: memory.used };
-    memory.used += 1;
-    return { ok: true, used: memory.used };
-  }
-  return withLock(w, () => {
-    const s = readState(w.file);
-    const used = s.day === day ? s.used : 0;
-    if (used >= max) return { ok: false, reason: "daily_limit", used };
-    const tmp = `${w.file}.${process.pid}.tmp`;
-    const fd = fs.openSync(tmp, "w", 0o600);
-    try {
-      fs.writeSync(fd, JSON.stringify({ day, used: used + 1 }));
-      fs.fsyncSync(fd);
-    } finally {
-      fs.closeSync(fd);
-    }
-    fs.renameSync(tmp, w.file);
-    return { ok: true, used: used + 1 };
-  });
+  return w ? withLock(w, () => reserveIn(w, max, day)) : reserveMemory(max, day);
+}
+
+/** Same, for the server: while another process holds the lock it waits without blocking other requests. */
+export async function reserveVisionAsync(max, now = Date.now()) {
+  const day = utcDay(now);
+  const w = where();
+  return w ? withLockAsync(w, () => reserveIn(w, max, day)) : reserveMemory(max, day);
 }
 
 /** For /health: only today's count and where it is kept (no requests, addresses or photos). */
@@ -99,13 +227,17 @@ export function visionUsage(now = Date.now()) {
   const day = utcDay(now);
   const w = where();
   if (!w) return { store: "memory", usedToday: memory.day === day ? memory.used : 0 };
+  if (w.notOnVolume) return { store: "not-on-volume", usedToday: null };
   try {
     const s = readState(w.file);
-    return { store: "persistent", usedToday: s.day === day ? s.used : 0 };
+    return { store: "persistent", usedToday: s.day === day ? s.used : s.day > day ? s.used : 0 };
   } catch {
     return { store: "error", usedToday: null };
   }
 }
+
+/** Tests only: the old-lock takeover step. */
+export const takeOverForTests = takeOver;
 
 /** Tests only: forget the in-memory count. */
 export function resetMemoryUsage() {

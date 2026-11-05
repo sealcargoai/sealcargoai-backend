@@ -101,12 +101,14 @@ export function storageStatus() {
   return {
     dataDir: onVolume(process.env.DATA_DIR || ""),
     verifyDir: onVolume(process.env.VERIFY_DATA_DIR || process.env.DATA_DIR || ""),
+    // 02-11z2: the photo-analysis daily counter's folder
+    visionDir: onVolume(process.env.VISION_DATA_DIR || process.env.DATA_DIR || ""),
     // the key file only survives a redeploy if it is on the volume (review 02-11m)
     verifyKey: process.env.VERIFY_SECRET ? "env" : signingSecretSource === "volume-file" && onVolume(process.env.DATA_DIR || "") !== "on-volume" ? "file-not-on-volume" : signingSecretSource,
   };
 }
 
-export const BACKEND_VERSION = "2026.11.05-z";
+export const BACKEND_VERSION = "2026.11.05-z2";
 app.get("/health", (_req, res) => {
   res.json({
     status:          "ok",

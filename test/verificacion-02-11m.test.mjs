@@ -195,10 +195,10 @@ test("privacidad · registros sin direcciones, códigos ni tokens", () => {
 test("7 · /health: DATA_DIR y la carpeta de verificación están (o no) dentro del volumen montado; origen de la clave, sin valores", async () => {
   const vol = tmp();
   const cases = [
-    [{ RAILWAY_VOLUME_MOUNT_PATH: vol, DATA_DIR: vol, REPORT_SECRET: "" }, { dataDir: "on-volume", verifyDir: "on-volume", verifyKey: "volume-file" }],
-    [{ RAILWAY_VOLUME_MOUNT_PATH: vol, DATA_DIR: path.join(vol, "sub"), REPORT_SECRET: "x".repeat(40) }, { dataDir: "on-volume", verifyDir: "on-volume", verifyKey: "env" }],
-    [{ RAILWAY_VOLUME_MOUNT_PATH: vol, DATA_DIR: tmp(), REPORT_SECRET: "" }, { dataDir: "not-on-volume", verifyDir: "not-on-volume", verifyKey: "file-not-on-volume" }],
-    [{ RAILWAY_VOLUME_MOUNT_PATH: "", DATA_DIR: "", REPORT_SECRET: "" }, { dataDir: "unset", verifyDir: "unset", verifyKey: "ephemeral" }],
+    [{ RAILWAY_VOLUME_MOUNT_PATH: vol, DATA_DIR: vol, REPORT_SECRET: "" }, { dataDir: "on-volume", verifyDir: "on-volume", visionDir: "on-volume", verifyKey: "volume-file" }],
+    [{ RAILWAY_VOLUME_MOUNT_PATH: vol, DATA_DIR: path.join(vol, "sub"), REPORT_SECRET: "x".repeat(40) }, { dataDir: "on-volume", verifyDir: "on-volume", visionDir: "on-volume", verifyKey: "env" }],
+    [{ RAILWAY_VOLUME_MOUNT_PATH: vol, DATA_DIR: tmp(), REPORT_SECRET: "" }, { dataDir: "not-on-volume", verifyDir: "not-on-volume", visionDir: "not-on-volume", verifyKey: "file-not-on-volume" }],
+    [{ RAILWAY_VOLUME_MOUNT_PATH: "", DATA_DIR: "", REPORT_SECRET: "" }, { dataDir: "unset", verifyDir: "unset", visionDir: "unset", verifyKey: "ephemeral" }],
   ];
   for (const [env, want] of cases) {
     const s = server(10700, env);
