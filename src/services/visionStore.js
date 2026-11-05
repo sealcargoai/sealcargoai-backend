@@ -21,6 +21,7 @@
 // - A failed write (disk full, no permission) removes its temp file and leaves the last good count in place.
 // - The day never goes backwards: if another instance's clock already wrote a later UTC day, that day and
 //   its count are kept (a slightly late clock cannot reset the count to 0).
+// - The server waits for a held lock with a timer (reserveVisionAsync), so other requests keep being answered.
 // - The day is the UTC date whatever TZ says: in Guatemala (UTC-6) the quota starts again at 18:00.
 import fs from "node:fs";
 import path from "node:path";
@@ -65,33 +66,26 @@ const readToken = (file) => {
   }
 };
 
-function withLock(w, fn) {
-  if (w.notOnVolume) throw new Error("vision usage folder is not on the mounted volume");
-  fs.mkdirSync(w.dir, { recursive: true });
-  const deadline = Date.now() + 2000;
-  // each lock carries its own token: inode numbers are reused by the file system, so they cannot tell an old
-  // lock from a new one
-  const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+// One attempt to take the lock: the open fd, or null when someone else holds a recent one (the caller waits).
+// Each lock carries its own token: inode numbers are reused by the file system, so they cannot tell an old
+// lock from a new one.
+function tryLock(w, token) {
   let fd;
-  for (;;) {
+  try {
+    fd = fs.openSync(w.lock, "wx", 0o600);
+  } catch (e) {
+    if (e.code !== "EEXIST") throw e;
+    let st;
     try {
-      fd = fs.openSync(w.lock, "wx", 0o600);
-      break;
-    } catch (e) {
-      if (e.code !== "EEXIST") throw e;
-      let st;
-      try {
-        st = fs.statSync(w.lock);
-      } catch {
-        continue; // released between the open and the stat
-      }
-      if (Date.now() - st.mtimeMs > 10_000) {
-        takeOver(w.lock, readToken(w.lock));
-        continue;
-      }
-      if (Date.now() > deadline) throw new Error("vision usage lock timeout");
-      pause(5);
+      st = fs.statSync(w.lock);
+    } catch {
+      return tryLock(w, token); // released between the open and the stat
     }
+    if (Date.now() - st.mtimeMs > 10_000) {
+      takeOver(w.lock, readToken(w.lock));
+      return tryLock(w, token);
+    }
+    return null;
   }
   try {
     fs.writeSync(fd, token);
@@ -100,12 +94,44 @@ function withLock(w, fn) {
     fs.rmSync(w.lock, { force: true });
     throw e;
   }
+  return fd;
+}
+
+function runLocked(w, fd, token, fn) {
   try {
     return fn();
   } finally {
     fs.closeSync(fd);
     // only the lock this call created (if it was ever taken over as old, the new holder's stays)
     if (readToken(w.lock) === token) fs.rmSync(w.lock, { force: true });
+  }
+}
+
+const prepare = (w) => {
+  if (w.notOnVolume) throw new Error("vision usage folder is not on the mounted volume");
+  fs.mkdirSync(w.dir, { recursive: true });
+  return { token: `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`, deadline: Date.now() + 2000 };
+};
+
+// synchronous version (scripts and tests): waits by pausing the thread
+function withLock(w, fn) {
+  const { token, deadline } = prepare(w);
+  for (;;) {
+    const fd = tryLock(w, token);
+    if (fd !== null) return runLocked(w, fd, token, fn);
+    if (Date.now() > deadline) throw new Error("vision usage lock timeout");
+    pause(5);
+  }
+}
+
+// 02-11z2: the server's version waits with a timer, so a held lock never freezes the other requests
+async function withLockAsync(w, fn) {
+  const { token, deadline } = prepare(w);
+  for (;;) {
+    const fd = tryLock(w, token);
+    if (fd !== null) return runLocked(w, fd, token, fn); // the read-check-write itself stays synchronous
+    if (Date.now() > deadline) throw new Error("vision usage lock timeout");
+    await new Promise((r) => setTimeout(r, 5));
   }
 }
 
@@ -151,39 +177,49 @@ function syncDir(dir) {
   }
 }
 
+function reserveIn(w, max, day) {
+  const s = readState(w.file);
+  // the day never goes backwards (another instance's clock may be a little ahead)
+  const today = s.day > day ? s.day : day;
+  const used = s.day === today ? s.used : 0;
+  if (used >= max) return { ok: false, reason: "daily_limit", used };
+  const tmp = `${w.file}.${process.pid}.tmp`;
+  try {
+    const fd = fs.openSync(tmp, "w", 0o600);
+    try {
+      fs.writeSync(fd, JSON.stringify({ day: today, used: used + 1 }));
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tmp, w.file);
+  } catch (e) {
+    fs.rmSync(tmp, { force: true });
+    throw e;
+  }
+  syncDir(w.dir);
+  return { ok: true, used: used + 1 };
+}
+
+function reserveMemory(max, day) {
+  if (memory.day !== day) Object.assign(memory, { day, used: 0 });
+  if (memory.used >= max) return { ok: false, reason: "daily_limit", used: memory.used };
+  memory.used += 1;
+  return { ok: true, used: memory.used };
+}
+
 /** Takes one analysis from today's cap: { ok: true, used } or { ok: false, reason: "daily_limit", used }. Throws if the store fails. */
 export function reserveVision(max, now = Date.now()) {
   const day = utcDay(now);
   const w = where();
-  if (!w) {
-    if (memory.day !== day) Object.assign(memory, { day, used: 0 });
-    if (memory.used >= max) return { ok: false, reason: "daily_limit", used: memory.used };
-    memory.used += 1;
-    return { ok: true, used: memory.used };
-  }
-  return withLock(w, () => {
-    const s = readState(w.file);
-    // the day never goes backwards (another instance's clock may be a little ahead)
-    const today = s.day > day ? s.day : day;
-    const used = s.day === today ? s.used : 0;
-    if (used >= max) return { ok: false, reason: "daily_limit", used };
-    const tmp = `${w.file}.${process.pid}.tmp`;
-    try {
-      const fd = fs.openSync(tmp, "w", 0o600);
-      try {
-        fs.writeSync(fd, JSON.stringify({ day: today, used: used + 1 }));
-        fs.fsyncSync(fd);
-      } finally {
-        fs.closeSync(fd);
-      }
-      fs.renameSync(tmp, w.file);
-    } catch (e) {
-      fs.rmSync(tmp, { force: true });
-      throw e;
-    }
-    syncDir(w.dir);
-    return { ok: true, used: used + 1 };
-  });
+  return w ? withLock(w, () => reserveIn(w, max, day)) : reserveMemory(max, day);
+}
+
+/** Same, for the server: while another process holds the lock it waits without blocking other requests. */
+export async function reserveVisionAsync(max, now = Date.now()) {
+  const day = utcDay(now);
+  const w = where();
+  return w ? withLockAsync(w, () => reserveIn(w, max, day)) : reserveMemory(max, day);
 }
 
 /** For /health: only today's count and where it is kept (no requests, addresses or photos). */
