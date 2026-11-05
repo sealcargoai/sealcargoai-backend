@@ -79,33 +79,34 @@ export async function analyzeProductImage({ dataUrl, description = "", lang = "e
   if (usage.used >= dailyMax()) return { unavailable: true, reason: "daily_limit" };
   usage.used += 1;
   const model = process.env.GROQ_VISION_MODEL || "qwen/qwen3.8-27b";
-  let content = "";
-  try {
-    const r = await axios.post(
+  // 02-11y: production answered 400 with a system message next to the image (some vision models refuse it),
+  // so the instructions go in the same user message as the photo; if JSON mode is refused, one retry without it
+  const user = [
+    { type: "text", text: `${PROMPT}\n\nPerson's description (may be empty, language ${lang === "en" ? "English" : "Spanish"}): «${clip(description, 600)}»\nAnswer with the JSON object only.\n/no_think` },
+    { type: "image_url", image_url: { url: dataUrl } },
+  ];
+  const ask = (json) =>
+    axios.post(
       "https://api.groq.com/openai/v1/chat/completions",
-      {
-        model,
-        messages: [
-          { role: "system", content: PROMPT },
-          {
-            role: "user",
-            content: [
-              { type: "text", text: `Person's description (may be empty, language ${lang === "en" ? "English" : "Spanish"}): «${clip(description, 600)}»\n/no_think` },
-              { type: "image_url", image_url: { url: dataUrl } },
-            ],
-          },
-        ],
-        response_format: { type: "json_object" },
-        temperature: 0.1,
-        max_tokens: 400,
-      },
+      { model, messages: [{ role: "user", content: user }], ...(json ? { response_format: { type: "json_object" } } : {}), temperature: 0.1, max_tokens: 600 },
       { headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, timeout: 20000 },
     );
+  // the provider's error text never contains the photo; it is logged short, without the request
+  const why = (e) => clip(e.response?.data?.error?.message || e.code || e.message || "", 160);
+  let content = "";
+  try {
+    let r;
+    try {
+      r = await ask(true);
+    } catch (e) {
+      if (e.response?.status !== 400) throw e;
+      console.warn(`⚠️ Photo analysis 400 with JSON mode (${why(e)}) — retrying without it`);
+      r = await ask(false);
+    }
     content = String(r.data?.choices?.[0]?.message?.content || "");
   } catch (e) {
     const status = e.response?.status;
-    // never log the request (it carries the photo); only the status
-    console.warn(`⚠️ Photo analysis unavailable (${status || e.code || "error"})`);
+    console.warn(`⚠️ Photo analysis unavailable (${status || e.code || "error"}): ${why(e)}`);
     return { unavailable: true, reason: status === 429 ? "busy" : "error" };
   }
   let j;
