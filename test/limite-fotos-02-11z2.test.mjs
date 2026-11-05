@@ -176,3 +176,24 @@ process.stdout.write(JSON.stringify(out));`;
     assert.deepEqual(out, ["2026-11-05", true, false, "2026-11-06", true], TZ);
   }
 });
+
+test("7 · mientras otro proceso tiene el bloqueo, el servidor sigue respondiendo (la espera no congela)", async () => {
+  const DATA = fresh("espera");
+  const LOG = path.join(root, "groq-espera.jsonl");
+  fs.writeFileSync(path.join(DATA, "vision-usage.lock"), "otro-proceso");
+  const S = server(19200, { GROQ_API_KEY: "fake-key", FAKE_GROQ_VISION: PUMP, FAKE_GROQ_LOG: LOG, DATA_DIR: DATA });
+  servers.push(S);
+  await S.start();
+  const t0 = Date.now();
+  const pending = S.post("/api/suppliers/image-analyze", { image: JPG }, "10.171.0.1").then((r) => r.json());
+  await new Promise((r) => setTimeout(r, 300));
+  const t1 = Date.now();
+  const h = await fetch(`${S.BASE}/health`).then((r) => r.json());
+  const healthMs = Date.now() - t1;
+  assert.equal(h.status, "ok");
+  assert.ok(healthMs < 500, `/health took ${healthMs} ms while the photo request waited for the lock`);
+  assert.deepEqual(await pending, { unavailable: true, reason: "limit_unavailable" });
+  assert.ok(Date.now() - t0 >= 1900, "the photo request did wait ~2 s for the lock");
+  assert.equal(groqCalls(LOG), 0);
+  assert.equal(fs.readFileSync(path.join(DATA, "vision-usage.lock"), "utf8"), "otro-proceso", "the other process's lock was not touched");
+});
