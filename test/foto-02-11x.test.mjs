@@ -56,6 +56,9 @@ test("2 · foto válida: sugiere el producto y lo impreso; la foto no se guarda,
   assert.deepEqual(sent[0].response_format, { type: "json_object" });
   assert.match(sent[0].text, /bomba para pozo/);
   assert.equal(sent[0].imageBytes, JPG.length);
+  // 02-11y: one user message carries instructions and photo (no system message next to an image)
+  assert.deepEqual(sent[0].roles, ["user"]);
+  assert.match(sent[0].text, /isProduct/);
   // nothing persisted anywhere and no email
   const chunk = JPG.split(",")[1].slice(40, 120);
   const files = fs.readdirSync(DATA, { recursive: true }).map((f) => path.join(DATA, String(f))).filter((f) => fs.statSync(f).isFile());
@@ -114,4 +117,16 @@ test("6 · entradas malas: GIF, campos que no son texto, cuerpo demasiado grande
   // the larger limit is only for this route
   const search = await S.post("/api/suppliers/search", { productType: "machinery", userQuery: "x".repeat(300_000) }, "10.150.3.4");
   assert.equal(search.status, 413);
+});
+
+test("7 · 02-11y: si Groq rechaza el modo JSON con la foto (400), reintenta una vez sin él y responde", async () => {
+  const LOG = path.join(dir, "groq-400.jsonl");
+  const S = await start(16200, { FAKE_GROQ_VISION: PUMP, FAKE_GROQ_JSON_400: "1", FAKE_GROQ_LOG: LOG });
+  const j = await (await S.post("/api/suppliers/image-analyze", { image: JPG }, "10.150.4.1")).json();
+  assert.equal(j.ok, true);
+  assert.equal(j.productEs, "bomba de agua sumergible de acero inoxidable");
+  const sent = fs.readFileSync(LOG, "utf8").trim().split("\n").map((l) => JSON.parse(l));
+  assert.deepEqual(sent.map((x) => !!x.response_format), [true, false]);
+  assert.match(S.logs, /400 with JSON mode \(fake: response_format not supported with images\)/);
+  assert.ok(!S.logs.includes(JPG.split(",")[1].slice(40, 120)), "photo in the log");
 });

@@ -599,3 +599,9 @@ El tiempo de resolución sigue una distribución geométrica con cola larga. El 
 - La foto no se busca, no cuenta como búsqueda, no se guarda, no se registra y no va en ningún correo ni caso. Solo JPG/PNG/WebP, comprobados por sus bytes; máximo 1.5 MB (cuerpo 2.2 MB solo en esa ruta; las demás siguen en 200 KB). Foto que no es un producto → no se sugiere nada. Sin marcas. Instrucciones escritas en la foto se ignoran. Respuesta de la IA limpiada (sin HTML, textos cortos, máximo 6 datos).
 - Plan gratuito: tope diario `VISION_DAILY_MAX` (60) y 10 fotos por hora por conexión; Groq ocupado (429), tope, error o sin clave → «No pudimos analizar la foto en este momento», y el cliente sigue con el texto. `VISION_DISABLED=1` la apaga; `GROQ_VISION_API_KEY` / `GROQ_VISION_MODEL` opcionales. `/health.vision` muestra modelo, uso del día y tope.
 - Pruebas: `test/foto-02-11x.test.mjs` (6). Recorrido local en Chromium (teléfono): foto 4000×3000 con GPS → llega 1024×768 sin GPS → sugerencia → el cliente la usa → consulta «24v dc» → 24 V DC recomendado y 220 V AC fuera; la foto en ningún correo ni registro (10/10). Suite 234/234.
+
+## 02-11y — Foto: Groq rechazaba la petición en producción (2026-11-05)
+
+- Primera prueba real (foto de una bomba sumergible, sin correos): `/api/suppliers/image-analyze` respondió «unavailable: error»; registro de Railway: «Photo analysis unavailable (400)». La causa probable es el mensaje de sistema junto a la imagen (varios modelos de visión no lo aceptan).
+- Corrección: instrucciones y foto en un solo mensaje del usuario; si Groq rechaza el modo JSON (400), un reintento sin él (la respuesta se sigue leyendo y limpiando igual). El motivo que da Groq se registra corto (solo texto del proveedor, nunca la foto).
+- Pruebas: `test/foto-02-11x.test.mjs` 6 → 7. Suite 235/235.
