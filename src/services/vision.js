@@ -80,8 +80,9 @@ export async function analyzeProductImage({ dataUrl, description = "", lang = "e
   let reserved;
   try {
     reserved = reserveVision(dailyMax());
-  } catch {
-    console.warn("⚠️ Photo analysis not attempted: the daily counter could not be read or written");
+  } catch (e) {
+    // only the error code (ENOSPC, EACCES…) or a fixed reason, never a request field
+    console.warn(`⚠️ Photo analysis not attempted: the daily counter could not be read or written (${/^E[A-Z]+$/.test(String(e?.code)) ? e.code : "store_error"})`);
     return { unavailable: true, reason: "limit_unavailable" };
   }
   if (!reserved.ok) return { unavailable: true, reason: "daily_limit" };
