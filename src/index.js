@@ -2,6 +2,7 @@ import path from "node:path";
 import dotenv from "dotenv";
 import { guardTls, tlsStatus } from "./tlsGuard.js";
 import { searchRoute } from "./services/alibaba.js";
+import { visionStatus } from "./services/vision.js";
 dotenv.config();   // ✅ MUST BE FIRST
 guardTls();        // 02-11q: certificate checks on for every outgoing HTTPS call
 
@@ -36,6 +37,8 @@ app.use(cors({
 
 // 5 MB only where the PDF report (base64) travels; everything else stays small
 app.use("/api/email/report", express.json({ limit: "5mb" }));
+// 02-11x: a photo shrunk on the page (≤1.5 MB) fits; every other route keeps 200 KB
+app.use("/api/suppliers/image-analyze", express.json({ limit: "2.2mb" }));
 app.use(express.json({ limit: "200kb" }));
 
 // Rate limits per IP
@@ -47,6 +50,8 @@ const searchLimiter = rateLimit({
   skip: (req) => typeof req.body?.userEmail === "string" && isQa(req.body.userEmail) && sessionVerifies(req.body?.verifiedSession, req.body.userEmail),
 });
 const aiLimiter     = rateLimit({ windowMs: 10 * 60 * 1000, max: 40 });
+// 02-11x: photo analyses per IP (the daily cap in services/vision.js protects the free plan)
+const imageLimiter  = rateLimit({ windowMs: 60 * 60 * 1000, max: 10, message: "Demasiadas fotos analizadas desde esta conexión. Continúa con la descripción o intenta más tarde." });
 const emailLimiter  = rateLimit({ windowMs: 60 * 60 * 1000, max: 10 });
 // 02-11k (review): the code steps have their own limit, so a report (code + confirm + send) does not use up
 // the budget of case and report sends of a shared office or mobile IP; per-address caps live in verifyStore
@@ -57,6 +62,7 @@ const followLimiter = rateLimit({ windowMs: 10 * 60 * 1000, max: 60 });
 app.use(learnBase);
 
 app.use("/api/suppliers/search", searchLimiter);
+app.use("/api/suppliers/image-analyze", imageLimiter);
 app.use("/api/suppliers", suppliersRouter);
 app.use("/api/ai", aiLimiter, aiRouter);
 app.use("/api/email/verify", verifyLimiter);
@@ -100,7 +106,7 @@ export function storageStatus() {
   };
 }
 
-export const BACKEND_VERSION = "2026.11.04-w";
+export const BACKEND_VERSION = "2026.11.05-x";
 app.get("/health", (_req, res) => {
   res.json({
     status:          "ok",
@@ -120,6 +126,7 @@ app.get("/health", (_req, res) => {
     tls:             tlsStatus(),
     // 02-11s: which route answered the last live supplier search (since start), and the Web Unblocker state
     searchRoute:     { ...searchRoute },
+    vision:          visionStatus(),
     // 02-11m: whether the data folders are on the volume Railway attached (status only, never paths/secrets)
     storage:         storageStatus(),
     timestamp:       new Date().toISOString(),
