@@ -7,6 +7,7 @@
 // - Groq free plan (no payment method): a daily cap keeps the analyses inside the free limits; over the cap,
 //   busy (429) or any error → "unavailable", and the client continues with the text (nothing is charged).
 import axios from "axios";
+import { reserveVision, visionUsage, resetMemoryUsage } from "./visionStore.js";
 
 export const IMAGE_MAX_BYTES = 1_500_000;
 const TYPES = { "image/jpeg": "jpeg", "image/png": "png", "image/webp": "webp" };
@@ -35,21 +36,21 @@ export function parseImage(dataUrl) {
   return { ok: true, mime: m[1], bytes: buf.length };
 }
 
-// daily cap (UTC day), so the free plan's 200K tokens/day are never exhausted by photos
-const usage = { day: "", used: 0 };
+// daily cap (UTC day), kept on the volume by services/visionStore.js (02-11z: it used to live in memory and a
+// restart or deploy reset it)
 const dailyMax = () => Math.max(0, parseInt(process.env.VISION_DAILY_MAX ?? "60", 10) || 0);
 export function visionStatus() {
-  const today = new Date().toISOString().slice(0, 10);
+  const u = visionUsage();
   return {
     configured: !!(process.env.GROQ_VISION_API_KEY || process.env.GROQ_API_KEY) && process.env.VISION_DISABLED !== "1",
     model: process.env.GROQ_VISION_MODEL || "qwen/qwen3.8-27b",
-    usedToday: usage.day === today ? usage.used : 0,
+    usedToday: u.usedToday,
     dailyMax: dailyMax(),
+    store: u.store,
   };
 }
 export function resetVisionUsage() {
-  usage.day = "";
-  usage.used = 0;
+  resetMemoryUsage();
 }
 
 const PROMPT = `You look at ONE photo that a person sent to find suppliers for importing a product to Guatemala.
@@ -74,10 +75,16 @@ export async function analyzeProductImage({ dataUrl, description = "", lang = "e
   const key = process.env.GROQ_VISION_API_KEY || process.env.GROQ_API_KEY;
   if (process.env.VISION_DISABLED === "1") return { unavailable: true, reason: "disabled" };
   if (!key) return { unavailable: true, reason: "not_configured" };
-  const today = new Date().toISOString().slice(0, 10);
-  if (usage.day !== today) Object.assign(usage, { day: today, used: 0 });
-  if (usage.used >= dailyMax()) return { unavailable: true, reason: "daily_limit" };
-  usage.used += 1;
+  // 02-11z: the analysis is reserved on the persistent counter BEFORE the provider is called; if the counter
+  // can't be read or written, the provider is not called (fail closed) and the client continues with the text
+  let reserved;
+  try {
+    reserved = reserveVision(dailyMax());
+  } catch {
+    console.warn("⚠️ Photo analysis not attempted: the daily counter could not be read or written");
+    return { unavailable: true, reason: "limit_unavailable" };
+  }
+  if (!reserved.ok) return { unavailable: true, reason: "daily_limit" };
   const model = process.env.GROQ_VISION_MODEL || "qwen/qwen3.8-27b";
   // 02-11y: production answered 400 with a system message next to the image (some vision models refuse it),
   // so the instructions go in the same user message as the photo; if JSON mode is refused, one retry without it
@@ -92,7 +99,16 @@ export async function analyzeProductImage({ dataUrl, description = "", lang = "e
       { headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" }, timeout: 20000 },
     );
   // the provider's error text never contains the photo; it is logged short, without the request
-  const why = (e) => clip(e.response?.data?.error?.message || e.code || e.message || "", 160);
+  // 02-11z: also without long base64-like runs or e-mail addresses, in case a provider ever echoed input
+  // (the client's description is removed word by word: a provider that repeated it would not put it in the log)
+  const descWords = [...new Set(clip(description, 600).split(/\s+/).filter((w) => w.length >= 3))].sort((a, b) => b.length - a.length);
+  const why = (e) => {
+    let m = String(e.response?.data?.error?.message || e.code || e.message || "")
+      .replace(/[A-Za-z0-9+/=_-]{40,}/g, "[…]")
+      .replace(/[^\s@]+@[^\s@]+/g, "[correo]");
+    for (const w of descWords) m = m.split(w).join("…");
+    return clip(m, 160);
+  };
   let content = "";
   try {
     let r;
