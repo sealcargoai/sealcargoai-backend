@@ -149,4 +149,76 @@ Remove numbers, sizes, capacities and specifications. Return ONLY the keyword.`,
   }
 }
 
+// ── 10-11: approximate cargo size for the freight estimate ──────────────────
+// When the client gives no volume or weight, the costs page asks here for the packed export volume (m³)
+// and gross weight (kg) of the order, so the freight follows the SIZE of the cargo (not its price).
+// GET (changes nothing; preview sandboxes may call it). Result is labelled as an estimate on the page.
+const sizeCache = new Map();
+const num = (v) => (typeof v === "number" ? v : parseFloat(String(v ?? "").replace(/,/g, "")));
+
+export function sanitizeSize(raw) {
+  const cbm = num(raw?.cbm);
+  const kg = num(raw?.kg);
+  // out-of-range or missing figures are dropped (the page then keeps freight «por cotizar»)
+  const okCbm = Number.isFinite(cbm) && cbm >= 0.001 && cbm <= 5000;
+  const okKg = Number.isFinite(kg) && kg >= 0.05 && kg <= 2000000;
+  if (!okCbm && !okKg) return null;
+  return { cbm: okCbm ? Math.round(cbm * 100) / 100 : 0, kg: okKg ? Math.round(kg) : 0 };
+}
+
+export async function estimateSize({ product, quantity, unit }) {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey || !product) return null;
+  const key = `${product.toLowerCase()}|${quantity}|${unit}`;
+  if (sizeCache.has(key)) return sizeCache.get(key);
+  const models = [...new Set([process.env.GROQ_SIZE_MODEL, process.env.GROQ_KEYWORD_MODEL, "qwen/qwen3.8-27b"].filter(Boolean))];
+  for (const model of models) {
+    try {
+      const response = await axios.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        {
+          model,
+          messages: [
+            {
+              role: "system",
+              content: `You are an ocean freight specialist for shipments from China to Central America.
+Estimate the TOTAL packed export size of an order: volume in cubic meters (m³) of the packed cargo (cartons, crates or pallets) and gross weight in kg.
+Base it on the typical real size and weight of the product as sold on Alibaba, times the quantity. Machinery is shipped in wooden crates or on skids; small goods in master cartons.
+Return ONLY JSON like {"cbm": 3.2, "kg": 1450}. No text, no ranges, no explanation.`,
+            },
+            { role: "user", content: `Product: ${product}\nQuantity: ${quantity} ${unit || "units"}\n/no_think` },
+          ],
+          temperature: 0.1,
+          max_tokens: 400,
+        },
+        { headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, timeout: 12000 },
+      );
+      let text = response.data?.choices?.[0]?.message?.content || "";
+      text = text.replace(/<think>[\s\S]*?<\/think>/gi, "").replace(/<think>[\s\S]*/gi, "");
+      const m = text.match(/\{[\s\S]*?\}/);
+      const size = m ? sanitizeSize(JSON.parse(m[0])) : null;
+      if (size) {
+        if (sizeCache.size > 500) sizeCache.delete(sizeCache.keys().next().value);
+        sizeCache.set(key, size);
+        return size;
+      }
+      console.warn(`⚠️ Groq size (${model}) returned no usable figures`);
+    } catch (error) {
+      console.error(`⚠️ Groq size failed with ${model}:`, error.response?.data?.error?.message || error.message);
+    }
+  }
+  return null;
+}
+
+router.get("/size", async (req, res) => {
+  const product = String(req.query.product || "").replace(/[\u0000-\u001f]/g, " ").trim().slice(0, 300);
+  const quantity = Math.min(Math.max(Math.round(num(req.query.quantity) || 1), 1), 10000000);
+  const unit = String(req.query.unit || "").replace(/[^a-záéíóúñ ]/gi, "").slice(0, 20);
+  if (!product) return res.status(400).json({ error: "product required" });
+  const size = await estimateSize({ product, quantity, unit });
+  if (!size) return res.json({ size: null });
+  res.set("Cache-Control", "public, max-age=3600");
+  res.json({ size, source: "ai" });
+});
+
 export default router;
