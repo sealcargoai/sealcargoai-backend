@@ -166,10 +166,10 @@ export function sanitizeSize(raw) {
   return { cbm: okCbm ? Math.round(cbm * 100) / 100 : 0, kg: okKg ? Math.round(kg) : 0 };
 }
 
-export async function estimateSize({ product, quantity, unit }) {
+export async function estimateSize({ product, quantity, unit, price = 0 }) {
   const apiKey = process.env.GROQ_API_KEY;
   if (!apiKey || !product) return null;
-  const key = `${product.toLowerCase()}|${quantity}|${unit}`;
+  const key = `${product.toLowerCase()}|${quantity}|${unit}|${Math.round(price)}`;
   if (sizeCache.has(key)) return sizeCache.get(key);
   const models = [...new Set([process.env.GROQ_SIZE_MODEL, process.env.GROQ_KEYWORD_MODEL, "qwen/qwen3.8-27b"].filter(Boolean))];
   for (const model of models) {
@@ -184,9 +184,10 @@ export async function estimateSize({ product, quantity, unit }) {
               content: `You are an ocean freight specialist for shipments from China to Central America.
 Estimate the TOTAL packed export size of an order: volume in cubic meters (m³) of the packed cargo (cartons, crates or pallets) and gross weight in kg.
 Base it on the typical real size and weight of the product as sold on Alibaba, times the quantity. Machinery is shipped in wooden crates or on skids; small goods in master cartons.
+Use the unit price as a hint of the model's size: a cheap machine is a small, basic model. Estimate the main equipment only, as listed, without extra accessories, molds, mixers or conveyors unless the product says they are included. If unsure, choose the smaller typical model.
 Return ONLY JSON like {"cbm": 3.2, "kg": 1450}. No text, no ranges, no explanation.`,
             },
-            { role: "user", content: `Product: ${product}\nQuantity: ${quantity} ${unit || "units"}\n/no_think` },
+            { role: "user", content: `Product: ${product}\nQuantity: ${quantity} ${unit || "units"}${price > 0 ? `\nUnit price (FOB, USD): ${price}` : ""}\n/no_think` },
           ],
           temperature: 0.1,
           max_tokens: 400,
@@ -214,8 +215,9 @@ router.get("/size", async (req, res) => {
   const product = String(req.query.product || "").replace(/[\u0000-\u001f]/g, " ").trim().slice(0, 300);
   const quantity = Math.min(Math.max(Math.round(num(req.query.quantity) || 1), 1), 10000000);
   const unit = String(req.query.unit || "").replace(/[^a-záéíóúñ ]/gi, "").slice(0, 20);
+  const price = Math.min(Math.max(num(req.query.price) || 0, 0), 100000000);
   if (!product) return res.status(400).json({ error: "product required" });
-  const size = await estimateSize({ product, quantity, unit });
+  const size = await estimateSize({ product, quantity, unit, price });
   if (!size) return res.json({ size: null });
   res.set("Cache-Control", "public, max-age=3600");
   res.json({ size, source: "ai" });
