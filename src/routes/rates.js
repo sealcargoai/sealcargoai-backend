@@ -12,7 +12,11 @@ const SHEET_TAB = process.env.RATES_SHEET_TAB || "Tarifas";
 const CACHE_MS = 60 * 60 * 1000; // 1 hour
 
 export const DEFAULT_RATES = {
-  container40: 6000,
+  // 10-11: SEAL's all-in reference freight China → warehouse on the outskirts of Guatemala City (every
+  // charge included): consolidated US$2,045 per m³, 40' container US$11,750. Insurance and destination
+  // charges are inside the freight (0); the SEAL customs fee stays. Must match the frontend calculator.
+  container40: 11750,
+  lclRatePerCbm: 2045,
   container20: 0,
   container40Cbm: 55,
   container20Cbm: 25,
@@ -21,14 +25,14 @@ export const DEFAULT_RATES = {
   lclMaxCbm: 15,
   dutyRate: 0.15,
   vatRate: 0.12,
-  insuranceRate: 0.01,
-  insuranceMin: 250,
+  insuranceRate: 0,
+  insuranceMin: 0,
   customsFees: 200,
-  localCharges: 450,
+  localCharges: 0,
   // the same fixed amounts in quetzales and the exchange rate the frontend uses, so
   // the sheet can change them too (they used to be ignored: the keys were missing)
   customsFeesGTQ: 1200,
-  localChargesGTQ: 9500,
+  localChargesGTQ: 0,
   exchangeRate: 7.9,
   transitDays: "30-45",
 };
