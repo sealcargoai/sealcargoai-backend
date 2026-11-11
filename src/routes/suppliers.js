@@ -92,12 +92,21 @@ router.get("/packaging", async (req, res) => {
   if (!packInflight.has(p.id)) {
     if (packCount >= PACKAGING_DAILY_MAX) return res.json({ packaging: null, reason: "daily_cap" });
     packCount++;
-    packInflight.set(p.id, fetchProductPackaging(p.url).catch(() => null).finally(() => packInflight.delete(p.id)));
+    // the read keeps going (and is cached) even if the page stops waiting: the next visit gets it at once
+    packInflight.set(
+      p.id,
+      fetchProductPackaging(p.url)
+        .catch(() => ({ failed: true, packaging: null }))
+        .then((r) => {
+          // a page that could not be read is not cached (it may work later); a page read with no data is, for a day
+          if (!r.failed) packCache.set(p.id, r.packaging, r.packaging ? 7 * 24 * 3600 : 24 * 3600);
+          return r;
+        })
+        .finally(() => packInflight.delete(p.id)),
+    );
   }
-  const packaging = await packInflight.get(p.id);
-  // a page that could not be read is not cached (it may work later); a page with no data is
-  packCache.set(p.id, packaging, packaging ? 7 * 24 * 3600 : 24 * 3600);
-  res.json({ packaging });
+  const r = await packInflight.get(p.id);
+  res.json(r.failed ? { packaging: null, reason: "unavailable" } : { packaging: r.packaging });
 });
 
 router.post("/search", async (req, res) => {

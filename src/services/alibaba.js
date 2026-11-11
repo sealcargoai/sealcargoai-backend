@@ -663,7 +663,10 @@ export function productIdFromUrl(raw) {
   return m ? { url: u, id: m[1] } : null;
 }
 
-export async function fetchProductPackaging(url, budgetMs = 45000) {
+// 10-11b: a page that could not be read (timeout, captcha) is { failed: true }, so it is not cached as
+// «no data»; 90 s lets the Scraper API retry (one page took over 45 s in production)
+export async function fetchProductPackaging(url, budgetMs = 90000) {
   const html = await fetchHtml(url, budgetMs, false);
-  return html ? parsePackaging(html) : null;
+  if (!html) return { failed: true, packaging: null };
+  return { failed: false, packaging: parsePackaging(html) };
 }
