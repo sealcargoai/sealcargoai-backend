@@ -33,7 +33,12 @@ let unblockPausedUntil = 0;
 export const searchRoute = { last: "", lastAt: null, unblocker: "unknown", parser: "" };
 
 async function fetchAlibabaHtml(keyword, budgetMs = SEARCH_BUDGET_MS) {
-  const url = buildAlibabaSearchUrl(keyword);
+  return fetchHtml(buildAlibabaSearchUrl(keyword), budgetMs, true);
+}
+
+// 10-11: the same route (Web Unblocker, then Scraper API) for any Alibaba page; `track` = a live search
+// (only searches update the route shown in /health)
+async function fetchHtml(url, budgetMs = SEARCH_BUDGET_MS, track = false) {
   const deadline = Date.now() + Math.min(budgetMs, SEARCH_BUDGET_MS);
   const remaining = () => deadline - Date.now();
 
@@ -91,7 +96,7 @@ async function fetchAlibabaHtml(keyword, budgetMs = SEARCH_BUDGET_MS) {
         console.log(`📄 HTML size (Unblocker attempt ${attempt}): ${html.length} bytes | Captcha: ${isCaptcha}`);
 
         if (!isCaptcha) {
-          Object.assign(searchRoute, { last: "web_unblocker", lastAt: new Date().toISOString(), unblocker: "ok" });
+          if (track) Object.assign(searchRoute, { last: "web_unblocker", lastAt: new Date().toISOString(), unblocker: "ok" });
           console.log("✅ Web Unblocker successfully retrieved full Alibaba page!");
           return html;
         }
@@ -174,7 +179,7 @@ async function fetchAlibabaHtml(keyword, budgetMs = SEARCH_BUDGET_MS) {
         console.log(`📄 Scraper API HTML size ('${source}' attempt ${attempt}): ${html.length} bytes | Captcha: ${isCaptcha}`);
 
         if (html && !isCaptcha) {
-          Object.assign(searchRoute, { last: `scraper_api:${source}`, lastAt: new Date().toISOString(), unblocker: Date.now() < unblockPausedUntil ? "rejected_401" : process.env.OXY_UNBLOCK_DISABLED === "1" ? "disabled" : searchRoute.unblocker });
+          if (track) Object.assign(searchRoute, { last: `scraper_api:${source}`, lastAt: new Date().toISOString(), unblocker: Date.now() < unblockPausedUntil ? "rejected_401" : process.env.OXY_UNBLOCK_DISABLED === "1" ? "disabled" : searchRoute.unblocker });
           console.log(`✅ Web Scraper API ('${source}') returned clean HTML!`);
           return html;
         }
@@ -590,4 +595,75 @@ async function searchAlibabaScraper({ keyword, relevanceKeyword, pageSize = 20, 
 ───────────────────────────────────────────── */
 export async function searchSuppliers({ keyword, relevanceKeyword, pageSize = 20, budgetMs }) {
     return await searchAlibabaScraper({ keyword, relevanceKeyword, pageSize, budgetMs });
+}
+
+/* ─────────────────────────────────────────────
+   10-11: packing size and weight of a listing
+───────────────────────────────────────────── */
+// The product page carries the supplier's «Packaging and delivery» data in its JSON:
+//   "logisticInfo":{…"unitSize":"200X200X225","unitVolume":"","unitWeight":"2500.0"}  (cm, m³, kg; per selling unit)
+// and, when that is empty, the spec attributes «Dimension (L*W*H)» (id 100008286) and «Weight (KG)» (id 225593355),
+// which are the equipment's size (not packed). Language-independent: the ids and keys do not change.
+function jsonStr(v) {
+  try { return JSON.parse(`"${v}"`); } catch { return v; }
+}
+
+export function parseDims(raw, defaultUnit = "cm") {
+  const str = String(raw || "").toLowerCase().replace(/,/g, ".");
+  const nums = (str.match(/\d+(?:\.\d+)?/g) || []).map(Number).filter((n) => n > 0);
+  if (nums.length < 3) return 0;
+  const [a, b, c] = nums;
+  const unit = /mm/.test(str) ? "mm" : /cm/.test(str) ? "cm" : /\d\s*m\b|\bm$/.test(str) ? "m" : defaultUnit;
+  const f = unit === "mm" ? 1000 : unit === "cm" ? 100 : 1;
+  return (a / f) * (b / f) * (c / f);
+}
+
+const kgOf = (raw) => {
+  const str = String(raw || "").toLowerCase().replace(/,/g, "");
+  const n = parseFloat((str.match(/\d+(?:\.\d+)?/) || [""])[0]);
+  if (!(n > 0)) return 0;
+  return /\btons?\b|\bt\b|toneladas?/.test(str) ? n * 1000 : /\bg\b|gramos?/.test(str) && !/kg/.test(str) ? n / 1000 : n;
+};
+
+export function parsePackaging(html) {
+  const h = String(html || "");
+  const li = h.match(/"logisticInfo":\{[^{}]*\}/);
+  const field = (k) => (li ? (li[0].match(new RegExp(`"${k}":"([^"]*)"`)) || [])[1] || "" : "");
+  const batch = parseInt((h.match(/"tradeInfo":\{[^{}]*?"batchNum":(\d+)/) || [])[1]) || 1;
+  const sizeTxt = jsonStr(field("unitSize"));
+  let cbm = parseFloat(field("unitVolume")) || parseDims(sizeTxt, "cm");
+  let kg = kgOf(field("unitWeight"));
+  let source = "package";
+  let text = sizeTxt ? `${sizeTxt} cm` : "";
+  if (!(cbm > 0) && !(kg > 0)) {
+    const attr = (id) => jsonStr((h.match(new RegExp(`"attrNameId":${id},"attrValue":"([^"]+)"`)) || [])[1] || "");
+    const dim = attr(100008286);
+    cbm = parseDims(dim, "mm");
+    kg = kgOf(attr(225593355));
+    source = "specs";
+    text = dim;
+  }
+  const okCbm = cbm >= 0.0001 && cbm <= 500;
+  const okKg = kg >= 0.01 && kg <= 100000;
+  if (!okCbm && !okKg) return null;
+  return {
+    source,                                             // "package" = packed (supplier), "specs" = equipment size
+    cbm: okCbm ? Math.round(cbm * 10000) / 10000 : 0,   // per selling batch
+    kg: okKg ? Math.round(kg * 100) / 100 : 0,
+    batch: batch > 0 && batch < 100000 ? batch : 1,      // units per package (1 unless the listing says so)
+    text: String(text).slice(0, 60),
+  };
+}
+
+const PRODUCT_URL = /^https:\/\/(?:www\.)?alibaba\.com\/product-detail\/[A-Za-z0-9._%-]+_(\d{6,20})\.html$/;
+export function productIdFromUrl(raw) {
+  let u = String(raw || "").trim().replace(/[?#].*$/, "");
+  if (u.startsWith("//")) u = `https:${u}`;
+  const m = u.match(PRODUCT_URL);
+  return m ? { url: u, id: m[1] } : null;
+}
+
+export async function fetchProductPackaging(url, budgetMs = 45000) {
+  const html = await fetchHtml(url, budgetMs, false);
+  return html ? parsePackaging(html) : null;
 }

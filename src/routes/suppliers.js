@@ -1,6 +1,6 @@
 import express from "express";
 import NodeCache from "node-cache";
-import { searchSuppliers } from "../services/alibaba.js";
+import { searchSuppliers, fetchProductPackaging, productIdFromUrl } from "../services/alibaba.js";
 import { scoreSuppliers, categorizeSuppliers } from "../services/scoring.js";
 import { refineKeyword, shortenKeyword } from "./ai.js";
 import { clientIp, clean, malformedFields, unsupportedEmail, QTY_MIN, QTY_MAX, BUDGET_MAX } from "../middleware/security.js";
@@ -74,6 +74,30 @@ router.post("/image-analyze", async (req, res) => {
   const r = await analyzeProductImage({ dataUrl: body.image, description: typeof body.description === "string" ? body.description.slice(0, 1500) : "", lang });
   if (r.unavailable) return res.json({ unavailable: true, reason: r.reason });
   res.json({ ok: true, ...r });
+});
+
+// 10-11: the supplier's packing size and weight from the product page («Packaging and delivery»), so the
+// freight follows the real size of the cargo. Read-only; cached a week per listing; a daily cap protects the
+// scraping plan (PACKAGING_DAILY_MAX, default 300 pages).
+const packCache = new NodeCache({ stdTTL: 7 * 24 * 3600 });
+const PACKAGING_DAILY_MAX = parseInt(process.env.PACKAGING_DAILY_MAX) || 300;
+let packDay = "", packCount = 0;
+const packInflight = new Map();
+router.get("/packaging", async (req, res) => {
+  const p = productIdFromUrl(req.query.url);
+  if (!p) return res.status(400).json({ error: "invalid_url" });
+  if (packCache.has(p.id)) return res.json({ packaging: packCache.get(p.id) });
+  const today = new Date().toISOString().slice(0, 10);
+  if (packDay !== today) { packDay = today; packCount = 0; }
+  if (!packInflight.has(p.id)) {
+    if (packCount >= PACKAGING_DAILY_MAX) return res.json({ packaging: null, reason: "daily_cap" });
+    packCount++;
+    packInflight.set(p.id, fetchProductPackaging(p.url).catch(() => null).finally(() => packInflight.delete(p.id)));
+  }
+  const packaging = await packInflight.get(p.id);
+  // a page that could not be read is not cached (it may work later); a page with no data is
+  packCache.set(p.id, packaging, packaging ? 7 * 24 * 3600 : 24 * 3600);
+  res.json({ packaging });
 });
 
 router.post("/search", async (req, res) => {

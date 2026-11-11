@@ -63,6 +63,8 @@ app.use(learnBase);
 
 app.use("/api/suppliers/search", searchLimiter);
 app.use("/api/suppliers/image-analyze", imageLimiter);
+// 10-11: packing size of a listing (one product page each, cached): per-IP limit
+app.use("/api/suppliers/packaging", rateLimit({ windowMs: 60 * 60 * 1000, max: 30 }));
 app.use("/api/suppliers", suppliersRouter);
 app.use("/api/ai", aiLimiter, aiRouter);
 app.use("/api/email/verify", verifyLimiter);
